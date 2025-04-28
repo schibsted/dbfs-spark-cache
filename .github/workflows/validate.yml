@@ -1,0 +1,56 @@
+name: Validate
+on:
+  push:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false  # will fetch manually for proper authorization
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Cache uv environment
+        uses: actions/cache@v4
+        with:
+          # The path is relative to the submodule's root directory
+          path: .venv
+          # The key uses the submodule's uv.lock file
+          key: ${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Validate project version
+        run: make validate-version
+
+      - name: Validate changelog
+        run: make validate-changelog
+
+      - name: Setup project
+        run: make setup
+
+      - name: Lint with ruff
+        run: make lint
+
+      - name: Static type checking with mypy
+        run: make typecheck
+
+# Tests are skipped in CI as they require a Databricks environment
+# - name: Run checks and unit tests
+#   run: make test
+
+permissions:
+  actions: read
+  id-token: write
+  contents: read

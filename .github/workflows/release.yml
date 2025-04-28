@@ -1,0 +1,88 @@
+name: Create a release
+on:
+  push:
+    branches: [main]
+
+
+jobs:
+  check_licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml" # Use pyproject in the root
+
+      - name: Install development dependencies
+        run: make setup
+
+      - name: Run license check script to check for non-allowed dependencies
+        run: make check-licenses
+
+  release:
+    needs: check_licenses # Make release dependent on license check approval
+    runs-on: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install tools
+        run: |
+          uv tool install tomlq
+
+      - name: Validate project version
+        run: make validate-version validate-release-version
+
+      - name: Get project version and name
+        id: get_version
+        run: |
+          VERSION=$(cat pyproject.toml | tomlq -jr .project.version)
+          PACKAGE_NAME=$(cat pyproject.toml | tomlq -jr .project.name | tr '-' '_')
+
+          echo "This is version v$VERSION of $PACKAGE_NAME."
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          NEW_VERSION="${{ steps.get_version.outputs.version }}"
+          if ! git tag "v$NEW_VERSION"; then
+            echo "::error::Failed to create tag v$NEW_VERSION of ${{ github.repository }}."
+            exit 1
+          fi
+          if ! git push origin "v$NEW_VERSION"; then
+            echo "::error::Failed to push tag v$NEW_VERSION of ${{ github.repository }}."
+            exit 1
+          fi
+
+      - name: Create Github release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_HOST: schibsted.ghe.com
+
+        run: |
+          NEW_VERSION="${{ steps.get_version.outputs.version }}"
+          gh auth status  -h $GH_HOST
+          gh release create "v$NEW_VERSION" \
+              --title="v$NEW_VERSION"
+
+      - name: Build package
+        run: |
+          if ! uv build; then
+            echo "::error::Package build failed"
+            exit 1
+          fi
+
+      # todo: add pipi publish stuff
+
+permissions:
+  actions: read
+  id-token: write
+  contents: write
