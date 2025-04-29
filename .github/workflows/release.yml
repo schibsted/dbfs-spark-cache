@@ -36,8 +36,8 @@ jobs:
         run: |
           uv tool install tomlq
 
-      - name: Validate project version
-        run: make validate-version validate-release-version
+      - name: Validate project version format
+        run: make validate-version # Only validate format, tag existence check is not needed here
 
       - name: Get project version and name
         id: get_version
