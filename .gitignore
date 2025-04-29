@@ -78,3 +78,5 @@ wheels/
 *.log
 logs/
 .DS_Store
+
+.databricks

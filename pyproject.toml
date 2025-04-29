@@ -1,6 +1,6 @@
 [project]
 name = "dbfs-spark-cache"
-version = "0.4.5"
+version = "0.4.7"
 description = "A utility for caching Spark DataFrames in Databricks File System"
 readme = "README.md"
 authors = [
@@ -68,6 +68,11 @@ disable_error_code = ["import-not-found", "union-attr"]
 module = ["tests.notebooks.*"]
 disable_error_code = ["name-defined", "has-type", "used-before-def", "operator", "method-assign", "arg-type", "attr-defined"]
 
+[[tool.mypy.overrides]]
+module = ["google.*"]
+ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+
 [tool.ruff]
 # Ignore E402 (module level import not at top of file) in test files
 # Ignore F401 (unused imports) in test files
@@ -86,4 +91,7 @@ dev = [
     "pytest>=8.3.4",
     "types-tqdm>=4.67.0.20241221",
     "pip-licenses>=5.0.0",
+    "hatch>=1.10.0",  # Added for building
+    "hatchling>=1.27.0",  # Added for building
+    "twine>=5.1.1",   # Added for uploading
 ]

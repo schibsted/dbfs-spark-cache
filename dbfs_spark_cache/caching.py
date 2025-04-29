@@ -18,6 +18,7 @@ from py4j.protocol import Py4JJavaError  # type: ignore[import-untyped]
 from pyspark.rdd import RDD
 # Import pyspark components first
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.utils import AnalysisException
 from tqdm import tqdm
 
 from dbfs_spark_cache.query_complexity_estimation import estimate_compute_complexity
@@ -354,6 +355,22 @@ def _hash_input_data(data: Union[pd.DataFrame, List[Any], Tuple[Any, ...]]) -> s
 
 # --- Helper Functions ---
 def get_table_hash(df: DataFrame) -> str:
+    # Check if the DataFrame is reading directly from a 'data_' cache table
+    try:
+        plan_str = df._jdf.queryExecution().analyzed().toString() # type: ignore
+        db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
+        # Regex to find 'Relation[... `db_name`.`data_hash` ...]'
+        # It needs to handle potential variations in the plan string format
+        pattern = rf"Relation.*`?{re.escape(db_name)}`?\.`?(data_[0-9a-fA-F]+)`?"
+        match = re.search(pattern, plan_str)
+        if match:
+            data_hash_name = match.group(1)
+            log.info(f"Identified direct data cache read from plan: {data_hash_name}")
+            return data_hash_name # Return the specific data hash
+    except Exception as e:
+        log.warning(f"Could not analyze plan for direct data cache check: {e}")
+
+    # --- Original logic as fallback ---
     input_dir_mod_datetime_raw: Union[Dict[str, datetime], Dict[str, bool]] = get_input_dir_mod_datetime(df)
     # Only keep items where value is a datetime
     input_dir_mod_datetime: Dict[str, datetime]
@@ -368,9 +385,10 @@ def get_table_hash(df: DataFrame) -> str:
     )
     hash_name = get_hash_from_metadata(metadata_txt)
     if hash_name is not None:
-        log.info(f"Found hash name: {hash_name}")
+        log.info(f"Found hash name from metadata: {hash_name}")
         return hash_name
     # print(f"Not cached to DBFS, get hash from query metadata")
+    log.info("Calculating hash from query metadata as fallback.")
     return hashlib.md5(metadata_txt.encode("utf-8")).hexdigest()
 
 def get_table_name_from_hash(hash_name: str) -> str:
@@ -419,7 +437,23 @@ def createCachedDataFrame(
 
     cache_hash_name = f"data_{data_hash}"
     table_name = get_table_name_from_hash(cache_hash_name)
-    table_exists = spark_session.catalog.tableExists(table_name)
+    table_exists = False # Default to False
+    try:
+        table_exists = spark_session.catalog.tableExists(table_name)
+    except AnalysisException as e:
+        # If the error is about the path not existing, it's a valid cache miss scenario.
+        # Check for common phrasings of this error.
+        if "doesn't exist" in str(e) or "Path does not exist" in str(e) or "[DELTA_PATH_DOES_NOT_EXIST]" in str(e):
+            log.info(f"Table or path for {table_name} does not exist, proceeding with creation (cache miss).")
+            table_exists = False
+        else:
+            # Re-raise other AnalysisExceptions
+            log.error(f"Unexpected AnalysisException checking table existence for {table_name}: {e}")
+            raise e
+    except Exception as e:
+        # Catch any other unexpected errors during table check
+        log.error(f"Unexpected error checking table existence for {table_name}: {e}")
+        raise e # Re-raise other exceptions
 
     if table_exists:
         log.info(f"Using existing direct data cache: {table_name}")

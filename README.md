@@ -1,6 +1,6 @@
 # dbfs-spark-cache
 
-A Python library for conveniently caching PySpark DataFrames to DBFS (Databricks File System). As opposed to [Spark caching or Databricks disk cache](https://docs.databricks.com/aws/en/optimizations/disk-cache), this will persist your dataframe to a permanent location (as a table) and is kept until deleted, even if your data breaks cluster is terminated. Testing has shown that this can dramatically speed up your query performance (see [CACHE_PERFORMANCE_ANALYSIS.md](CACHE_PERFORMANCE_PROFILE.md) for test results), particularly for exploratory data analysis (EDA) where you often need to rerun the same queries many times. The more permanent nature of this cache also makes it useful for quickly resuming work in a notebook, and it can also avoid the need for different users having to re-run the same queries needlessly.
+A Python library for conveniently caching PySpark DataFrames to DBFS (Databricks File System). As opposed to [Spark caching or Databricks disk cache](https://docs.databricks.com/aws/en/optimizations/disk-cache), this will persist your dataframe to a permanent location (as a table) and is kept until deleted, even if your data breaks cluster is terminated. Testing has shown that this can dramatically speed up your query performance (see [performance analysis](CACHE_PERFORMANCE_PROFILE.md) for test results), particularly for exploratory data analysis (EDA) where you often need to rerun the same queries many times. The more permanent nature of this cache also makes it useful for quickly resuming work in a notebook, and it can also avoid the need for different users having to re-run the same queries needlessly.
 
 To some extent this library will trade some smaller amount of extra query latency for an expected much reduce future latency for subsequent queries involving the same dataframe. This tradeoff can be tuned be a parameter which controlles when caching is trigged automatically, but it can also be triggered manually. Cached DataFrames also generally allowes much better query performance on downstream queries through increased spark executor load, possibly at the cost of some extra compute utilization.
 
@@ -13,7 +13,7 @@ To some extent this library will trade some smaller amount of extra query latenc
 
 Requires Python 3.10 or higher. Install using pip:
 ```sh
-    pip install dbfs-spark-cache # todo: assumes published to PyPI
+    pip install dbfs-spark-cache
 ```
 
 ## Usage
@@ -85,7 +85,7 @@ This library has been primarily tested under the following Databricks environmen
 - **Databricks database**: Hive Metastore
 - **Databricks Runtime Version**: 15.4 LTS
 - **Storage Layer**: DBFS and S3
-- **File Formats**: Parquet, JSON ()
+- **File Formats**: Parquet, JSON
 
 If you want to disable all calls to the extensions you can do:
 ```python

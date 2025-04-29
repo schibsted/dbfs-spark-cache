@@ -228,7 +228,7 @@ print(f"Query plan for UDF DataFrame (truncated): {plan_udf[:200]}...\n")
 print("\nTesting get_cache_metadata...")
 input_dirs_raw = get_input_dir_mod_datetime(df_simple)
 # Filter out non-datetime values for get_cache_metadata
-input_dirs: Dict[str, datetime] = {}
+input_dirs = {}
 if isinstance(input_dirs_raw, dict):
     input_dirs = {k: v for k, v in input_dirs_raw.items() if isinstance(v, datetime)} # type: ignore
 
@@ -837,3 +837,5 @@ print("Combined caching test passed.\n")
 # COMMAND ----------
 
 print("\nclearDbfsCache interaction test completed successfully.\n")
+
+# COMMAND ----------

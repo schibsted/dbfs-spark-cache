@@ -8,7 +8,7 @@ PROJECT_VERSION := $(shell uv tool run tomlq -jr .project.version < pyproject.to
 
 # Include .env file if it exists, suppressing errors if it doesn't
 -include .env
-export $(shell sed 's/=.*//' .env)
+export $(shell [ -f .env ] && sed 's/=.*//' .env) # Only export if .env exists
 
 .PHONY: help setup lint typecheck validate-version validate-changelog validate integration-test
 
@@ -58,7 +58,7 @@ validate-version:
 	fi
 
 validate-release-version:
-	@if git rev-parse "v$(PROJECT_VERSION)" >/dev/null 2>&amp;1; then \
+	@if git rev-parse "v$(PROJECT_VERSION)" >/dev/null 2>&1; then \
 		echo "::error::Tag v$(PROJECT_VERSION) already exists. Have you updated the version in pyproject.toml?"; \
 		exit 1; \
 	fi
@@ -99,3 +99,11 @@ validate: validate-version validate-changelog lint typecheck test
 integration-test:
 	@echo "--- Running Databricks integration test script ---"
 	@./scripts/run_integration_test.sh
+
+# Github release action should be used instead of local twine upload
+publish:
+	@echo "--- Publishing package to PyPI ---"
+	@make validate-release-version
+	uv pip install hatch twine && hatch build
+	@echo "--- Uploading to PyPI using twine ---"
+	uv run twine upload dist/*

@@ -1,8 +1,7 @@
 name: Create a release
 on:
-  push:
-    branches: [main]
-
+  release:
+    types: [published] # Trigger when a release is published
 
 jobs:
   check_licenses:
@@ -80,7 +79,11 @@ jobs:
             exit 1
           fi
 
-      # todo: add pipi publish stuff
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No API token needed here when using trusted publishing
+        # Ensure you have configured trusted publishing in your PyPI project settings:
+        # https://docs.pypi.org/trusted-publishers/adding-a-publisher/
 
 permissions:
   actions: read
