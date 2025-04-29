@@ -12,8 +12,6 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false  # will fetch manually for proper authorization
-          token: ${{ secrets.GH_PAT }}
-          persist-credentials: false
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
