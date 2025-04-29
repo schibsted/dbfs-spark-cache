@@ -10,7 +10,7 @@ PROJECT_VERSION := $(shell uv tool run tomlq -jr .project.version < pyproject.to
 -include .env
 export $(shell [ -f .env ] && sed 's/=.*//' .env) # Only export if .env exists
 
-.PHONY: help setup lint typecheck validate-version validate-changelog validate integration-test
+.PHONY: help setup lint typecheck test validate-version validate-changelog validate release integration-test
 
 help:
 	@echo "Available targets:"
@@ -21,6 +21,7 @@ help:
 	@echo "  validate-version   - Validate the project version in pyproject.toml"
 	@echo "  validate-changelog - Validate the Changelog.md for the current version"
 	@echo "  validate           - Run all validation steps (version, changelog, lint, typecheck, test)"
+	@echo "  release            - Tag current version, push tag, and create GitHub release (requires gh cli)"
 
 setup:
 	@echo "--- Installing dependencies (including dev) ---"
@@ -93,6 +94,39 @@ validate-changelog:
 validate: validate-version validate-changelog lint typecheck test
 	@echo "--- All validation steps passed ---"
 
+release: validate-version validate-changelog
+	@echo "--- Creating release for v$(PROJECT_VERSION) ---"
+	@# Ensure gh is installed and authenticated
+	@if ! command -v gh &> /dev/null; then \
+		echo "::error::GitHub CLI (gh) not found. Please install it."; \
+		exit 1; \
+	fi
+	@gh auth status > /dev/null || (echo "::error::GitHub CLI not authenticated. Please run 'gh auth login'."; exit 1)
+	@echo "--- Extracting notes from Changelog.md ---"
+	@NOTES=$$(awk '/^## \[v$(PROJECT_VERSION)\]/{flag=1; next} /^## \[/{flag=0} flag && NF' Changelog.md); \
+	if [ -z "$$NOTES" ]; then \
+		echo "::warning::Could not extract notes for v$(PROJECT_VERSION) from Changelog.md. Release will have no notes."; \
+	fi; \
+	echo "Notes found:\n$$NOTES"; \
+	echo "--- Creating git tag v$(PROJECT_VERSION) ---"; \
+	if ! git tag "v$(PROJECT_VERSION)"; then \
+		echo "::error::Failed to create tag v$(PROJECT_VERSION). Does it already exist?"; \
+		exit 1; \
+	fi; \
+	echo "--- Pushing git tag v$(PROJECT_VERSION) ---"; \
+	if ! git push origin "v$(PROJECT_VERSION)"; then \
+		echo "::error::Failed to push tag v$(PROJECT_VERSION) to origin."; \
+		git tag -d "v$(PROJECT_VERSION)" > /dev/null 2>&1; \
+		exit 1; \
+	fi; \
+	echo "--- Creating GitHub release v$(PROJECT_VERSION) ---"; \
+	if ! gh release create "v$(PROJECT_VERSION)" --title "v$(PROJECT_VERSION)" --notes "$$NOTES"; then \
+		echo "::error::Failed to create GitHub release v$(PROJECT_VERSION)."; \
+		exit 1; \
+	fi; \
+	echo "--- Release v$(PROJECT_VERSION) created successfully ---"
+	@echo "Triggered GitHub Actions workflow for publishing."
+
 # Target to run the integration test notebook as a Databricks job
 # Requires databricks CLI and jq to be installed
 # Reads configuration from .env file
@@ -100,10 +134,10 @@ integration-test:
 	@echo "--- Running Databricks integration test script ---"
 	@./scripts/run_integration_test.sh
 
-# Github release action should be used instead of local twine upload
-publish:
-	@echo "--- Publishing package to PyPI ---"
-	@make validate-release-version
-	uv pip install hatch twine && hatch build
-	@echo "--- Uploading to PyPI using twine ---"
-	uv run twine upload dist/*
+# Github release action should be used instead of local twine upload (old target below)
+# publish:
+#	@echo "--- Publishing package to PyPI ---"
+#	@make validate-release-version
+#	uv pip install hatch twine && hatch build
+#	@echo "--- Uploading to PyPI using twine ---"
+#	uv run twine upload dist/*

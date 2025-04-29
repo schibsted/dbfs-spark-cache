@@ -1,7 +1,7 @@
 name: Create a release
 on:
-  push:
-    branches: [main] # Trigger on push to main branch
+  release:
+    types: [published] # Trigger when a release is published
 
 jobs:
   check_licenses:

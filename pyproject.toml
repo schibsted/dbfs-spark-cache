@@ -1,6 +1,6 @@
 [project]
 name = "dbfs-spark-cache"
-version = "0.4.8"
+version = "0.4.9"
 description = "A utility for caching Spark DataFrames in Databricks File System"
 readme = "README.md"
 authors = [
