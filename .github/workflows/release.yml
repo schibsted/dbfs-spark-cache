@@ -49,28 +49,8 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
 
-      - name: Create tag
-        run: |
-          NEW_VERSION="${{ steps.get_version.outputs.version }}"
-          if ! git tag "v$NEW_VERSION"; then
-            echo "::error::Failed to create tag v$NEW_VERSION of ${{ github.repository }}."
-            exit 1
-          fi
-          if ! git push origin "v$NEW_VERSION"; then
-            echo "::error::Failed to push tag v$NEW_VERSION of ${{ github.repository }}."
-            exit 1
-          fi
-
-      - name: Create Github release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_HOST: github.com
-
-        run: |
-          NEW_VERSION="${{ steps.get_version.outputs.version }}"
-          gh auth status  -h $GH_HOST
-          gh release create "v$NEW_VERSION" \
-              --title="v$NEW_VERSION"
+      # Tag and release creation are now handled by the `make release` command
+      # which triggers this workflow.
 
       - name: Build package
         run: |
