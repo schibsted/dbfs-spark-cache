@@ -179,3 +179,12 @@ if you have the databricks CLI installed and a cluster variables configured, eg:
 ```
 
 Before merging a PR, the version in pyproject.toml needs to be updated and Changelog.md too with a matching entry.
+
+### Release process
+
+Make PR to main branch, get it approved and merged. It must contain a bump in the version in pyproject.toml and a matching entry in Changelog.md if a new release is to be made. Then run this on the main branch:
+```sh
+    make release
+```
+
+This will create a git tag, push it to origin and create a GitHub release and publish the package to PyPI (using the GitHub release action workflow).
