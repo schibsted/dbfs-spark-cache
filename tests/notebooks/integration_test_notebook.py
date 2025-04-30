@@ -807,6 +807,8 @@ df_mem2 = spark.createCachedDataFrame(data_mem2, schema=schema_norm)
 print("createCachedDataFrame DataFrame:")
 df_mem2.show()
 
+print(f"df_norm_cached hash: {get_table_hash(df_norm_cached)}\ndf_mem2 hash: {get_table_hash(df_mem2)}")
+
 # 3. Combine (union) the two DataFrames
 df_combined = df_norm_cached.unionByName(df_mem2)
 print("Combined DataFrame (before caching):")
@@ -814,6 +816,7 @@ df_combined.show()
 
 # 4. Cache the combined DataFrame
 df_combined_cached = df_combined.cacheToDbfs()
+assert not get_table_hash(df_combined_cached).startswith("data_"), f"Invalid hash for Dataframe derived from data-cached dataframe: {get_table_hash(df_combined_cached)}"
 assert "Scan ExistingRDD" not in get_query_plan(df_combined_cached), "A dataframe created with createDataFrame should not have a problematic indicator 'Scan ExistingRDD' in the query plan"
 print("Combined DataFrame (after caching):")
 df_combined_cached.show()
@@ -823,10 +826,6 @@ combined_rows = set(tuple(row) for row in df_combined_cached.collect())
 expected_rows = set([("A", 1), ("B", 2), ("C", 3), ("D", 4)])
 assert combined_rows == expected_rows, f"Combined DataFrame rows incorrect: {combined_rows}"
 
-print("Combined caching test passed.\n")
-
-# COMMAND ----------
-
 print("\nclearDbfsCache interaction test completed successfully.\n")
 combined_rows = set(tuple(row) for row in df_combined_cached.collect())
 expected_rows = set([("A", 1), ("B", 2), ("C", 3), ("D", 4)])
@@ -836,6 +835,7 @@ print("Combined caching test passed.\n")
 
 # COMMAND ----------
 
-print("\nclearDbfsCache interaction test completed successfully.\n")
+print("Integration test passed!")
 
 # COMMAND ----------
+
