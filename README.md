@@ -187,4 +187,4 @@ Make PR to main branch, get it approved and merged. It must contain a bump in th
     make release
 ```
 
-This will create a git tag, push it to origin and create a GitHub release and publish the package to PyPI (using the GitHub release action workflow).
+This will create a git tag, push it to origin and create a GitHub release (if you have set up the GitHub CLI and authenticated it) and publish the package to PyPI (using the GitHub release action workflow).
