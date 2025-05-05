@@ -85,22 +85,11 @@ def import_from_file(
 
     return getattr(imp_module, obj_name)
 
-set_and_get_workdir = import_from_file('../notebook_utils.py', 'set_and_get_workdir')
-setup_dependencies = import_from_file('../notebook_utils.py', 'setup_dependencies')
-
-# COMMAND ----------
-
-REPO_PATH = set_and_get_workdir(spark)  # noqa: F821
-
-# COMMAND ----------
-
-setup_dependencies(REPO_PATH, spark)  # noqa: F821
-
-# COMMAND ----------
-
-dbutils.library.restartPython()  # noqa: F821
-
-# COMMAND ----------
+if "client." not in os.getenv("DATABRICKS_RUNTIME_VERSION", ""):
+    set_and_get_workdir = import_from_file('../notebook_utils.py', 'set_and_get_workdir')
+    setup_dependencies = import_from_file('../notebook_utils.py', 'setup_dependencies')
+    REPO_PATH = set_and_get_workdir(spark)
+    setup_dependencies(REPO_PATH, spark)
 
 # MAGIC %md
 # MAGIC ### Integration Test Notebook for dbfs-spark-cache
@@ -113,9 +102,6 @@ dbutils.library.restartPython()  # noqa: F821
 # pyright: reportMissingImports=false, reportGeneralTypeIssues=false
 import time
 
-from pyspark.sql import SparkSession  # type: ignore
-
-spark = SparkSession.builder.getOrCreate() # type: ignore
 from pyspark.sql import types as spark_types  # type: ignore
 from pyspark.sql.functions import col, lit, rand
 from pyspark.sql.functions import sum as spark_sum
@@ -137,7 +123,7 @@ from dbfs_spark_cache.caching import (clear_cache_for_hash,
                                       write_dbfs_cache)
 from dbfs_spark_cache.config import config
 
-extend_dataframe_methods(dbfs_cache_complexity_threshold=130)
+extend_dataframe_methods(spark, dbfs_cache_complexity_threshold=130) # Pass spark
 
 import logging
 
@@ -838,4 +824,3 @@ print("Combined caching test passed.\n")
 print("Integration test passed!")
 
 # COMMAND ----------
-

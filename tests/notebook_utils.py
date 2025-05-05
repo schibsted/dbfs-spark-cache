@@ -1,6 +1,22 @@
 # tests/utils.py
 
 import os
+import IPython # type: ignore # Import IPython for the fallback
+
+def get_dbutils(spark):
+    """
+    Helper function to get the dbutils object, handling different Databricks environments.
+    """
+    if spark.conf.get("spark.databricks.service.client.enabled") == "true":
+        from pyspark.dbutils import DBUtils # type: ignore
+        return DBUtils(spark)
+    else:
+        # Fallback for older Databricks environments or local testing with mocked dbutils
+        try:
+            return IPython.get_ipython().user_ns["dbutils"]
+        except Exception:
+            raise EnvironmentError("dbutils not available. This function is intended for Databricks notebooks.")
+
 
 def set_and_get_workdir(spark):
     """
@@ -12,9 +28,7 @@ def set_and_get_workdir(spark):
     # where the notebook is located two directories deep within the repository.
     # Otherwise, it might not correctly determine the repository path.
     try:
-        # Access dbutils, which is available in Databricks notebooks
-        from pyspark.dbutils import DBUtils # type: ignore
-        dbutils = DBUtils(spark) # type: ignore
+        dbutils = get_dbutils(spark)
 
         NB_PATH = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
         if NB_PATH.startswith("/Users/"):
@@ -27,12 +41,13 @@ def set_and_get_workdir(spark):
 
         print(f"REPO_PATH: {REPO_PATH}")
         return REPO_PATH
-    except ImportError:
-        # Handle cases where dbutils is not available (e.g., local testing)
+    except EnvironmentError:
+        # Re-raise EnvironmentError from get_dbutils if dbutils is not available
         print("Warning: dbutils not found. Assuming local execution.")
-        # You might want to add logic here to determine REPO_PATH in a local environment
-        # For now, returning a placeholder or raising an error
         raise EnvironmentError("dbutils not available. This function is intended for Databricks notebooks.")
+    except ValueError:
+        # Re-raise ValueError if notebook path structure is unexpected
+        raise
     except Exception as e:
         print(f"An error occurred while setting workdir: {e}")
         raise
@@ -48,9 +63,7 @@ def setup_dependencies(repo_path, spark):
     # The `dbutils.library.restartPython()` call is specific to Databricks notebooks
     # and is used to ensure the newly installed library is available.
     try:
-        # Access dbutils, which is available in Databricks notebooks
-        from pyspark.dbutils import DBUtils # type: ignore
-        dbutils = DBUtils(spark) # type: ignore
+        dbutils = get_dbutils(spark)
 
         # Use Databricks magic commands via dbutils.notebook.run or similar if needed,
         # but direct shell commands via `!` might work in some Databricks environments.
@@ -63,7 +76,7 @@ def setup_dependencies(repo_path, spark):
 
         print(f"Building wheel in {repo_path}...")
         # Using f-strings for command construction, ensure `repo_path` is safe if it comes from user input
-        os.system(f"cd {repo_path} && pwd && ls -lat --full-time dist/*.whl | head -1 && uv build && ls -lat --full_time dist/*.whl | head -1")
+        os.system(f"cd {repo_path} && pwd && ls -lat --full-time dist/*.whl | head -1 && uv build && ls -lat --full-time dist/*.whl | head -1")
 
         print(f"Installing latest wheel from {repo_path}/dist...")
         # Using os.system for clarity, consider subprocess for more control
@@ -72,7 +85,7 @@ def setup_dependencies(repo_path, spark):
         print("Restarting Python kernel...")
         dbutils.library.restartPython()
 
-    except ImportError:
+    except EnvironmentError:
         print("Warning: dbutils not found. Skipping dependency setup.")
         # Handle cases where dbutils is not available (e.g., local testing)
         # You might want to add logic here for local dependency setup if needed

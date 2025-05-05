@@ -91,7 +91,7 @@ dbutils.library.restartPython()  # noqa: F821
 import pandas as pd
 import time
 from dbfs_spark_cache import extend_dataframe_methods
-extend_dataframe_methods()
+extend_dataframe_methods(spark) # Pass spark
 
 # Test createCachedDataFrame performace
 # Create a large DataFrame (100,000 rows, 10 columns)

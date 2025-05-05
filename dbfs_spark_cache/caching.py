@@ -1,7 +1,6 @@
 import hashlib
 import io
 import logging
-from math import inf
 import os
 import re
 import shutil
@@ -10,15 +9,17 @@ import types  # Added for attaching method
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from glob import glob
+from math import inf
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 from py4j.protocol import Py4JJavaError  # type: ignore[import-untyped]
 from pyspark.rdd import RDD
+
 # Import pyspark components first
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.utils import AnalysisException
+from pyspark.errors.exceptions.base import AnalysisException # Changed import
 from tqdm import tqdm
 
 from dbfs_spark_cache.query_complexity_estimation import estimate_compute_complexity
@@ -1000,27 +1001,23 @@ def __withCachedDisplay__(
 
 # Initialization function
 def extend_dataframe_methods(
+    spark_session: SparkSession, # Added spark_session parameter
     display_fun: Callable = lambda x, *a, **kw: display(x, *a, **kw), # Match display sig
     dbfs_cache_complexity_threshold: Optional[float] = getattr(config, "DEFAULT_COMPLEXITY_THRESHOLD", inf),
     dbfs_cache_multiplier_threshold: Optional[float] = getattr(config, "DEFAULT_MULTIPLIER_THRESHOLD", inf),
     disable_cache_and_display: bool = False,
 ):
     """Initialize SparkSession and DataFrame class with caching capabilities."""
-    global spark
-    if spark is None:
-         log.warning("SparkSession None during init. Attempting get/create.")
-         try: spark = SparkSession.builder.appName("dbfs_spark_cache_init").getOrCreate() # type: ignore[misc]
-         except Exception as e: raise RuntimeError("Could not obtain SparkSession.") from e
 
     global original_create_dataframe
     # Store the original createDataFrame method before potentially overriding it
     # Only store if it hasn't been stored yet
-    if original_create_dataframe is None and hasattr(spark, "createDataFrame"):
-         original_create_dataframe = spark.createDataFrame
-         log.info("Stored original spark.createDataFrame method.")
+    if original_create_dataframe is None and hasattr(spark_session, "createDataFrame"): # Use spark_session
+         original_create_dataframe = spark_session.createDataFrame # Use spark_session
+         log.info("Stored original spark_session.createDataFrame method.")
 
-    if not hasattr(spark, "createCachedDataFrame"):
-         spark.createCachedDataFrame = types.MethodType(createCachedDataFrame, spark) # type: ignore[attr-defined]
+    if not hasattr(spark_session, "createCachedDataFrame"): # Use spark_session
+         spark_session.createCachedDataFrame = types.MethodType(createCachedDataFrame, spark_session) # type: ignore[attr-defined]
          log.info("Attached 'createCachedDataFrame' to SparkSession.")
 
     # Extra threshold dependent conveience functions:
