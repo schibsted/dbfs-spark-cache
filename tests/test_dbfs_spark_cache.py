@@ -19,18 +19,19 @@ def test_import_dbfs_spark_cache():
     except ImportError as e:
         assert False, f"Import failed for dbfs_spark_cache: {str(e)}"
 
-def test_extend_dataframe_methods():
+def test_extend_dataframe_methods(mock_dataframe_extensions_databricks_env):
     """Test extend_dataframe_methods function modifies the global DataFrame class."""
     # Import the real DataFrame and extend_dataframe_methods
     from pyspark.sql import DataFrame
 
     from dbfs_spark_cache import extend_dataframe_methods
 
-    # Create a mock display function
-    mock_display_fn = MagicMock()
+    # The fixture provides the mock spark session and display function
+    mock_spark_session = mock_dataframe_extensions_databricks_env['spark_session']
+    mock_display_fn = mock_dataframe_extensions_databricks_env['display_fun']
 
     # Call the initialization function
-    extend_dataframe_methods(display_fun=mock_display_fn)
+    extend_dataframe_methods(spark_session=mock_spark_session, display_fun=mock_display_fn)
 
     # Assert that the methods have been added to the global DataFrame class
     assert hasattr(DataFrame, 'withCachedDisplay')
@@ -49,7 +50,6 @@ def test_extend_dataframe_methods():
 
 def test_estimate_compute_complexity():
     """Test the real estimate_compute_complexity logic with mocked DataFrame and file sizes."""
-    from unittest.mock import MagicMock
 
     import dbfs_spark_cache.query_complexity_estimation as qce
 
@@ -133,7 +133,6 @@ def test_calculate_complexity_from_plan_count():
 
 def test_cacheToDbfs_uses_existing_cache():
     """Test that cacheToDbfs returns existing cache without rewriting."""
-    from unittest.mock import MagicMock
 
     from dbfs_spark_cache import caching
 
@@ -200,7 +199,6 @@ def test_get_hash_from_metadata_correct_group():
 
 def test_cacheToDbfs_skips_on_existing_rdd():
     """Test that cacheToDbfs skips caching if 'Scan ExistingRDD' is in the query plan."""
-    from unittest.mock import MagicMock
 
     from dbfs_spark_cache import caching
 
@@ -232,7 +230,6 @@ def test_cacheToDbfs_skips_on_existing_rdd():
 def test_get_input_dir_mod_datetime_handles_schema_change():
     """Test get_input_dir_mod_datetime returns {} on DELTA_SCHEMA_CHANGE error."""
     import datetime  # Import datetime for mocking
-    from unittest.mock import MagicMock
 
     from py4j.protocol import Py4JJavaError  # type: ignore[import-untyped]
 

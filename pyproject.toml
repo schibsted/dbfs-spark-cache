@@ -12,7 +12,6 @@ dependencies = [
     "pandas>=2.2.3",
     "pydantic>=2.10.4",
     "pydantic-settings>=2.7.0",
-    "pyspark>=3.5.0",
     "tqdm>=4.67.1",
     "mypy>=1.14.1",
     "pandas-stubs>=2.2.3.241126",
@@ -74,6 +73,10 @@ module = ["google.*"]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
 
+[[tool.mypy.overrides]]
+module = ["pyspark.*", "py4j.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 # Ignore E402 (module level import not at top of file) in test files
 # Ignore F401 (unused imports) in test files
@@ -83,6 +86,7 @@ exclude = [".venv", "build"]
 [tool.ruff.per-file-ignores]
 "tests/*" = ["F401"]
 "tests/notebooks/*" = ["F821"]
+
 [project.optional-dependencies]
 dev = [
     "mypy>=1.14.1",
@@ -96,4 +100,5 @@ dev = [
     "hatch>=1.10.0",  # Added for building
     "hatchling>=1.27.0",  # Added for building
     "twine>=5.1.1",   # Added for uploading
+    "pyspark>=3.5.0", # Added for tests
 ]

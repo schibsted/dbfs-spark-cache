@@ -62,7 +62,11 @@ def mock_dataframe_extensions_databricks_env():
     # Also install dbutils as a top-level module for direct imports
     sys.modules['dbutils'] = mock_dbutils
 
-    yield
+    # Yield the mock objects needed by the tests
+    yield {
+        'spark_session': mock_runtime.spark,
+        'display_fun': mock_runtime.display
+    }
 
     # Restore original modules
     if original_databricks is not None:

@@ -32,9 +32,14 @@ def test_run_dbfs_and_df_extension_tests(mock_dataframe_extensions_databricks_en
     for test_func in tests:
         test_name = test_func.__name__
         try:
-            # Call the test function without passing the mock environment
-            # since these functions don't accept parameters
-            test_func()
+            # Call the test function, passing the fixture if it's test_extend_dataframe_methods
+            if test_func == test_extend_dataframe_methods:
+                # test_extend_dataframe_methods now accepts the fixture directly
+                test_func(mock_dataframe_extensions_databricks_env) # type: ignore[no-untyped-call]
+            else:
+                # Call other tests without arguments
+                test_func() # type: ignore[no-untyped-call]
+
             test_results[test_name] = "PASS"
         except Exception as e:
             test_results[test_name] = f"FAIL: {str(e)}"
@@ -51,5 +56,4 @@ def test_run_dbfs_and_df_extension_tests(mock_dataframe_extensions_databricks_en
         failed_tests = [name for name, result in test_results.items() if result.startswith("FAIL")]
         pytest.fail(f"The following tests failed: {', '.join(failed_tests)}")
 
-    print("Successfully ran all dbfs-spark-cache tests")
     print("Successfully ran all dbfs-spark-cache tests")
