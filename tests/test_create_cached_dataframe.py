@@ -1,8 +1,11 @@
-import pytest
-import pandas as pd
 from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+from pyspark.sql import Row, SparkSession
+
 from dbfs_spark_cache import caching
-from pyspark.sql import SparkSession, Row
+
 
 @pytest.fixture(scope="module")
 def spark():
@@ -78,9 +81,8 @@ def test_create_cached_dataframe_miss_and_hit(spark, tmp_path):
          patch.object(caching.config, "CACHE_DATABASE", "test_cache_db"), \
          patch.object(spark, "createDataFrame") as mock_create_df, \
          patch.object(spark.catalog, "tableExists") as mock_table_exists, \
-         patch("pyspark.sql.readwriter.DataFrameReader.table") as mock_read_table, \
-         patch("dbfs_spark_cache.caching.Path.mkdir"), \
-         patch("builtins.open"):
+             patch("pyspark.sql.readwriter.DataFrameReader.table") as mock_read_table, \
+             patch("builtins.open"):
         # Setup mock DataFrame
         mock_df = MagicMock()
         mock_df.count.return_value = 2
@@ -108,7 +110,6 @@ def test_create_cached_dataframe_schema(spark, tmp_path):
          patch.object(spark, "createDataFrame") as mock_create_df, \
          patch.object(spark.catalog, "tableExists") as mock_table_exists, \
          patch("pyspark.sql.readwriter.DataFrameReader.table") as mock_read_table, \
-         patch("dbfs_spark_cache.caching.Path.mkdir"), \
          patch("builtins.open"):
         # Setup mock DataFrame with schema
         mock_schema = MagicMock()
@@ -138,10 +139,9 @@ def test_cacheToDbfs_bypass_for_data_cache(spark, tmp_path):
         patch.object(caching.config, "CACHE_DATABASE", "test_cache_db"), \
         patch.object(spark, "createDataFrame") as mock_create_df, \
         patch.object(spark.catalog, "tableExists") as mock_table_exists, \
-        patch("pyspark.sql.readwriter.DataFrameReader.table") as mock_read_table, \
-        patch("dbfs_spark_cache.caching.Path.mkdir"), \
-        patch("builtins.open"), \
-        patch("dbfs_spark_cache.caching.get_query_plan") as mock_get_query_plan:
+         patch("pyspark.sql.readwriter.DataFrameReader.table") as mock_read_table, \
+         patch("builtins.open"), \
+         patch("dbfs_spark_cache.caching.get_query_plan") as mock_get_query_plan:
         # Setup mock DataFrame
         mock_df = MagicMock()
         mock_df.count.return_value = 1
