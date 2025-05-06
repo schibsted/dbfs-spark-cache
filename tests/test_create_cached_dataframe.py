@@ -151,13 +151,25 @@ def test_cacheToDbfs_bypass_for_data_cache(spark, tmp_path):
         mock_create_df.return_value = mock_df
         mock_read_table.return_value = mock_df
         mock_table_exists.return_value = False
-        # Simulate direct data cache detection
-        mock_get_query_plan.return_value = "spark_catalog.test_cache_db.data_cccccccccccccccccccccccccccccccc"
+        # Simulate direct data cache detection by ensuring get_input_dir_mod_datetime returns the magic string
+        # And also ensure we are testing the standard DBFS path
+        mock_get_query_plan.return_value = "some_plan" # Actual plan content doesn't matter as much as input_info
 
-        data = [{"a": 1, "b": "x"}]
-        df = caching.createCachedDataFrame(spark, data)
-        # Should bypass cacheToDbfs logic and just return self
-        with patch.object(caching.log, "info") as mock_log:
-            result = caching.cacheToDbfs(df)
-            assert result is df
-            assert any("Direct data cache source. Skipping standard cache." in str(call) for call in mock_log.call_args_list)
+        # df is an instance of a mock, but createCachedDataFrame returns a mock_df
+        # For cacheToDbfs, we need to ensure it's called on an object that has sparkSession
+        df_for_cache_to_dbfs = MagicMock()
+        df_for_cache_to_dbfs.sparkSession = spark # Assign the mocked spark session
+
+        # Ensure should_prefer_spark_cache is False to test the original bypass logic path
+        with patch.object(caching, 'should_prefer_spark_cache', return_value=False), \
+                patch.object(caching, 'get_input_dir_mod_datetime', return_value={"<direct_data_cache>": True}), \
+                patch.object(caching.log, "info") as mock_log:
+            result = caching.cacheToDbfs(df_for_cache_to_dbfs) # Call with the df that has sparkSession
+            assert result is df_for_cache_to_dbfs # Should return self
+            # Check if the specific log message for direct data cache bypass was called
+            found_log = False
+            for call in mock_log.call_args_list:
+                if "Direct data cache source. Skipping standard cache." in str(call):
+                    found_log = True
+                    break
+            assert found_log, "Log message for direct data cache bypass not found."

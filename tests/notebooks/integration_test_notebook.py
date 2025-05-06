@@ -521,6 +521,108 @@ df_chained = wcd(df_simple).groupBy("name").agg(spark_sum("salary").alias("total
 df_chained = wcd(df_chained)
 print(f"Chained wcd: {df_chained}\n")
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Test PREFER_SPARK_CACHE and backup_spark_cached_to_dbfs
+
+# COMMAND ----------
+
+from dbfs_spark_cache.caching import should_prefer_spark_cache, backup_spark_cached_to_dbfs, clear_spark_cached_registry, is_spark_cached, _spark_cached_dfs_registry
+from dbfs_spark_cache.config import config as app_config
+import os
+
+# --- Test PREFER_SPARK_CACHE behavior ---
+print("\\n--- Testing PREFER_SPARK_CACHE behavior ---")
+
+# Scenario 1: Classic cluster, PREFER_SPARK_CACHE = True
+original_prefer_config = app_config.PREFER_SPARK_CACHE
+original_runtime_version = os.environ.get("DATABRICKS_RUNTIME_VERSION")
+
+app_config.PREFER_SPARK_CACHE = True
+if original_runtime_version: # Keep original if it exists
+    os.environ["DATABRICKS_RUNTIME_VERSION"] = "13.3.x-scala2.12" # Simulate classic
+else: # If it doesn't exist, set it then unset it
+    os.environ["DATABRICKS_RUNTIME_VERSION"] = "13.3.x-scala2.12"
+
+print(f"Simulating Classic Cluster (DATABRICKS_RUNTIME_VERSION={os.environ.get('DATABRICKS_RUNTIME_VERSION')}), PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
+assert should_prefer_spark_cache() is True, "should_prefer_spark_cache should be True on classic with PREFER_SPARK_CACHE=True"
+
+df_classic_prefer_true = df_simple.select("name", "age") # Create a new DF for this test
+hash_classic_prefer_true = get_table_hash(df_classic_prefer_true)
+clear_cache_for_hash(hash_classic_prefer_true) # Ensure no DBFS cache
+clear_spark_cached_registry()
+assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty"
+
+print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=True, no existing DBFS cache...")
+df_cached_classic_spark = cacheToDbfs(df_classic_prefer_true)
+
+assert is_spark_cached(df_cached_classic_spark), "DataFrame should be Spark-cached"
+assert df_cached_classic_spark in _spark_cached_dfs_registry, "DataFrame should be in registry"
+table_name_classic_spark = get_table_name_from_hash(hash_classic_prefer_true)
+assert not spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} should NOT exist yet"
+print(f"DataFrame was Spark-cached and added to registry. DBFS table {table_name_classic_spark} does not exist yet.")
+
+# Now, test backup
+print("\\nTesting backup_spark_cached_to_dbfs...")
+backup_spark_cached_to_dbfs(spark) # Use registry
+assert spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} SHOULD exist after backup"
+print(f"DBFS table {table_name_classic_spark} exists after backup.")
+clear_cache_for_hash(hash_classic_prefer_true) # Clean up
+
+# Scenario 2: Classic cluster, PREFER_SPARK_CACHE = False
+app_config.PREFER_SPARK_CACHE = False
+print(f"\\nSimulating Classic Cluster, PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
+assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should be False on classic with PREFER_SPARK_CACHE=False"
+
+df_classic_prefer_false = df_simple.select("name", "salary")
+hash_classic_prefer_false = get_table_hash(df_classic_prefer_false)
+clear_cache_for_hash(hash_classic_prefer_false)
+clear_spark_cached_registry()
+
+print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=False...")
+df_cached_classic_dbfs = cacheToDbfs(df_classic_prefer_false, dbfs_cache_complexity_threshold=0) # Force DBFS cache
+
+assert not is_spark_cached(df_cached_classic_dbfs), "DataFrame should NOT be Spark-cached by default if going to DBFS"
+assert df_cached_classic_dbfs not in _spark_cached_dfs_registry, "DataFrame should NOT be in registry"
+table_name_classic_dbfs = get_table_name_from_hash(hash_classic_prefer_false)
+assert spark.catalog.tableExists(table_name_classic_dbfs), f"DBFS table {table_name_classic_dbfs} SHOULD exist"
+print(f"DataFrame was cached to DBFS. DBFS table {table_name_classic_dbfs} exists.")
+clear_cache_for_hash(hash_classic_prefer_false)
+
+# Scenario 3: Serverless cluster, PREFER_SPARK_CACHE = True (should be ignored)
+os.environ["DATABRICKS_RUNTIME_VERSION"] = "client.whatever" # Simulate serverless
+app_config.PREFER_SPARK_CACHE = True
+print(f"\\nSimulating Serverless Cluster (DATABRICKS_RUNTIME_VERSION={os.environ.get('DATABRICKS_RUNTIME_VERSION')}), PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
+assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should be False on serverless regardless of PREFER_SPARK_CACHE"
+
+df_serverless_prefer_true = df_simple.select("age", "salary")
+hash_serverless_prefer_true = get_table_hash(df_serverless_prefer_true)
+clear_cache_for_hash(hash_serverless_prefer_true)
+clear_spark_cached_registry()
+
+print("Calling cacheToDbfs on serverless, PREFER_SPARK_CACHE=True (should use standard DBFS logic)...")
+df_cached_serverless_dbfs = cacheToDbfs(df_serverless_prefer_true, dbfs_cache_complexity_threshold=0) # Force DBFS cache
+
+assert not is_spark_cached(df_cached_serverless_dbfs), "DataFrame should NOT be Spark-cached by default if going to DBFS on serverless"
+assert df_cached_serverless_dbfs not in _spark_cached_dfs_registry, "DataFrame should NOT be in registry on serverless"
+table_name_serverless_dbfs = get_table_name_from_hash(hash_serverless_prefer_true)
+assert spark.catalog.tableExists(table_name_serverless_dbfs), f"DBFS table {table_name_serverless_dbfs} SHOULD exist on serverless"
+print(f"DataFrame was cached to DBFS on serverless. DBFS table {table_name_serverless_dbfs} exists.")
+clear_cache_for_hash(hash_serverless_prefer_true)
+
+# Restore original environment
+app_config.PREFER_SPARK_CACHE = original_prefer_config
+if original_runtime_version:
+    os.environ["DATABRICKS_RUNTIME_VERSION"] = original_runtime_version
+elif "DATABRICKS_RUNTIME_VERSION" in os.environ and os.environ.get("DATABRICKS_RUNTIME_VERSION", "").startswith("13.3") or os.environ.get("DATABRICKS_RUNTIME_VERSION", "").startswith("client"): # only delete if we set it
+    del os.environ["DATABRICKS_RUNTIME_VERSION"]
+
+print("\\n--- PREFER_SPARK_CACHE behavior tests completed ---")
+
+
+# COMMAND ----------
+
 print("\nTesting DataFrame.clearDbfsCache...")
 df_to_clear = cacheToDbfs(df_simple)
 print(f"Cached DataFrame: {df_to_clear}\n")
@@ -853,4 +955,3 @@ print("Combined caching test passed.\n")
 print("Integration test passed!")
 
 # COMMAND ----------
-

@@ -8,6 +8,7 @@ To some extent this library will trade some smaller amount of extra query latenc
 
 - **DataFrame caching**: Intelligent caching system using DBFS (Databricks File System).
 - **Query complexity estimation**: Tools to analyze and estimate Spark query complexity and trigger caching if above some set threshold.
+- **Hybrid Spark/DBFS caching**: On classic clusters, you can now prefer Spark's in-memory cache (`.cache()`) for fast iterative work, and only persist to DBFS when needed (see below).
 
 ## Installation
 
@@ -70,6 +71,40 @@ DBFS_CACHE_MULTIPLIER_THRESHOLD=1.01
 ```
 Set either threshold to None to disable that specific check.
 Caching occurs only if BOTH conditions are met (or the threshold is None).
+
+## New: Hybrid Spark/DBFS Caching and Backup
+Because spark cache is faster than dbfs cache when used with clusers with enough memory or disk space (and fast SSD disks are use as well), we can use it for fast iterative work, and only persist to dbfs when needed, ie when shutting down the cluster.
+
+- **Backup of Spark-cached DataFrames**: Use `backup_spark_cached_to_dbfs(spark)` to persist all Spark-cached DataFrames to DBFS before cluster termination.
+- **Configurable caching mode**: The new `PREFER_SPARK_CACHE` config (default: True) controls whether Spark in-memory cache is preferred on classic clusters. On serverless clusters, DBFS caching is always used.
+- **Automatic registry of Spark-cached DataFrames**: DataFrames cached via `.cacheToDbfs()` in Spark-cache mode are tracked and can be listed or backed up.
+- **Full test coverage**: All new logic is covered by unit and integration tests.
+
+By default (on classic clusters), calling `.cacheToDbfs()` will:
+- Use Spark's in-memory cache (`.cache()`) if no DBFS cache exists, and register the DataFrame for backup.
+- If a DBFS cache exists, it will be read as before.
+- You can persist all Spark-cached DataFrames to DBFS at any time (e.g. before cluster shutdown) with:
+
+```python
+from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
+backup_spark_cached_to_dbfs(spark)
+```
+
+You can also clear the registry of tracked Spark-cached DataFrames with:
+
+```python
+from dbfs_spark_cache.caching import clear_spark_cached_registry
+clear_spark_cached_registry()
+```
+
+To force the old behavior (always cache to DBFS), set:
+
+```python
+from dbfs_spark_cache.config import config
+config.PREFER_SPARK_CACHE = False
+```
+
+On serverless clusters, DBFS caching is always used regardless of this setting.
 
 ### Dataframe cache invalidation techniques that triggers cache invalidation?
 

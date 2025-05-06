@@ -164,7 +164,9 @@ def test_cacheto_dbfs_new_cache(mock_dbutils_ls, mock_dataframe, mock_spark_sess
     mock_dataframe.sparkSession = mock_spark_session
 
     # Patch dependencies called *by* cacheToDbfs
-    with patch('dbfs_spark_cache.caching.get_query_plan', return_value="SimplePlan") as mock_get_plan, \
+    # Ensure we test the standard DBFS write path by mocking should_prefer_spark_cache
+    with patch('dbfs_spark_cache.caching.should_prefer_spark_cache', return_value=False), \
+         patch('dbfs_spark_cache.caching.get_query_plan', return_value="SimplePlan") as mock_get_plan, \
          patch('dbfs_spark_cache.caching.get_input_dir_mod_datetime', return_value={"s3://bucket/data": datetime(2023, 1, 1)}) as mock_get_input, \
          patch('dbfs_spark_cache.caching.read_dbfs_cache_if_exist', return_value=None) as mock_read_cache_alias, \
          patch('dbfs_spark_cache.caching.write_dbfs_cache') as mock_write_dbfs_cache, \
@@ -201,6 +203,7 @@ def test_cacheto_dbfs_new_cache(mock_dbutils_ls, mock_dataframe, mock_spark_sess
 
         # Assert the result is the specific mock returned by the patched function
         assert result == mock_df_returned_by_write
+
 def test_cacheto_dbfs_with_replace_true(mock_dataframe, mock_spark_session): # Removed mock_dbutils_ls from args
     """Test cacheToDbfs with replace=True parameter forces a write and read."""
     # Patch dbutils inside the 'with' statement
@@ -234,6 +237,7 @@ def test_cacheto_dbfs_with_replace_true(mock_dataframe, mock_spark_session): # R
         mock_write_dbfs_cache.assert_not_called() # Changed from mock_dbfs_cache
         # The result should be the DataFrame returned by read_dbfs_cache_if_exist
         assert result == cached_df
+
 @patch('dbutils.fs.ls')
 def test_cacheto_dbfs_below_threshold(mock_dbutils_ls, mock_dataframe):
     """Test cacheToDbfs on a small DataFrame below complexity threshold."""

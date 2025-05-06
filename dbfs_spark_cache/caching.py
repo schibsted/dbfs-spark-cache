@@ -6,6 +6,7 @@ import re
 import sys
 import time
 import types  # Added for attaching method
+import weakref # Added for WeakSet
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from math import inf
@@ -26,6 +27,9 @@ from .config import config
 
 # Configure module-level logger using __name__ first
 log = logging.getLogger(__name__)
+
+# Global registry for Spark-cached DataFrames
+_spark_cached_dfs_registry: 'weakref.WeakSet[DataFrame]' = weakref.WeakSet()
 
 # Then import databricks runtime stuff
 try:
@@ -1024,21 +1028,80 @@ def cache_dataframes_in_queue_to_dbfs():
         log.info(f"Deferred item time: {time.time() - t_start:.2f}s")
     log.info(f"Finished deferred queue ({processed} processed).")
 
+# Helper function to determine if Spark cache should be preferred
+def should_prefer_spark_cache() -> bool:
+    if is_serverless_cluster():
+        return False  # Always False on serverless
+    return config.PREFER_SPARK_CACHE
+
 # DataFrame extension method
 def cacheToDbfs(
     self: DataFrame, deferred=False, dbfs_cache_complexity_threshold=None,
     dbfs_cache_multiplier_threshold=None, **kwargs
 ) -> DataFrame:
-    """Caches the DataFrame to DBFS based on inputs/plan, skipping direct data caches."""
-    # Use self.sparkSession instead of global spark
+    """Caches the DataFrame to DBFS based on inputs/plan, or uses Spark's in-memory cache.
+
+    On classic (non-serverless) clusters, if config.PREFER_SPARK_CACHE is True,
+    this method will first check for an existing DBFS cache. If not found, it will
+    use Spark's in-memory .cache() and register the DataFrame for potential backup
+    to DBFS later via backup_spark_cached_to_dbfs().
+
+    On serverless clusters, or if config.PREFER_SPARK_CACHE is False, it falls back
+    to the standard DBFS caching logic based on complexity thresholds.
+    """
     spark_session = self.sparkSession
     if spark_session is None:
         log.error("SparkSession not available via self.sparkSession.")
         return self
 
-    if not deferred:
+    # Handle deferred caching first, as it might influence eager operations
+    if deferred:
+        # If preferring Spark cache, ensure it's Spark-cached now and added to registry
+        if should_prefer_spark_cache() and not is_spark_cached(self):
+            log.info("Deferred mode: Eagerly Spark-caching and registering for potential backup.")
+            self.cache()
+            _spark_cached_dfs_registry.add(self)
+        add_to_dbfs_cache_queue(self)
+        return self
+
+    # --- Eager Caching Logic (not deferred) ---
+    if should_prefer_spark_cache():
+        log.debug("Preferring Spark cache on classic cluster.")
+        # Attempt to read from existing DBFS cache first
+        # For this, we need query_plan and input_dir_mod_datetime
+        # It's okay to calculate these even if we end up Spark-caching,
+        # as backup_spark_cached_to_dbfs will need them anyway.
+        current_query_plan_for_dbfs_check = get_query_plan(self)
+        input_info_for_dbfs_check = get_input_dir_mod_datetime(self)
+        input_dir_mod_datetime_casted_for_dbfs_check: Dict[str, datetime] = {}
+        if isinstance(input_info_for_dbfs_check, dict) and not input_info_for_dbfs_check.get("<direct_data_cache>", False):
+            input_dir_mod_datetime_casted_for_dbfs_check = input_info_for_dbfs_check # type: ignore
+
+        df_dbfs_existing = read_dbfs_cache_if_exist(
+            self,
+            query_plan=current_query_plan_for_dbfs_check,
+            input_dir_mod_datetime=input_dir_mod_datetime_casted_for_dbfs_check
+        )
+        if df_dbfs_existing is not None:
+            log.info("Found existing DBFS cache. Using it.")
+            return df_dbfs_existing
+
+        # No DBFS cache found, proceed with Spark in-memory cache
+        if not is_spark_cached(self):
+            log.info("No DBFS cache found. Using Spark in-memory cache and registering for backup.")
+            self.cache()
+            _spark_cached_dfs_registry.add(self)
+        else:
+            log.info("DataFrame is already Spark-cached. Ensuring it's registered for backup.")
+            # It might have been cached outside this function, add it to registry if not present
+            # to allow backup_spark_cached_to_dbfs to find it.
+            if self not in _spark_cached_dfs_registry: # Check before adding
+                 _spark_cached_dfs_registry.add(self)
+        return self
+    else:
+        # Standard DBFS caching logic (serverless or PREFER_SPARK_CACHE is False)
+        log.debug("Using standard DBFS caching logic (serverless or PREFER_SPARK_CACHE is False).")
         current_query_plan = get_query_plan(self)
-        # --- Add check for ExistingRDD ---
         if ("Scan ExistingRDD" in current_query_plan) or ("LocalTableScan" in current_query_plan):
             log.info("Skipping cache for DataFrame derived from RDD (Scan ExistingRDD found in plan).")
             return self
@@ -1077,13 +1140,18 @@ def cacheToDbfs(
         num_workers = 0 # Default value
         log.info(f"DBFS: False, Spark:{is_spark_cached(self)}, Workers: {num_workers}")
 
+        # Initialize complexity variables before try-except
+        complexity: float = inf
+        multiplier: float = inf
+        dataset_size: float = 0.0
+
         try:
             # Re-assign potentially
             complexity, multiplier, dataset_size = estimate_compute_complexity(self) # type: ignore # Suppress "Column" not callable error
             log.info(f"Complexity: {complexity:.1f}, Size: {dataset_size:.1f}GB, Multiplier: {multiplier:.2f}")
         except Exception as e:
             log.warning(f"Complexity failed: {e}. Assume complex.")
-            # Keep default inf values
+            # Values remain inf/inf/0.0 if estimation fails
 
         compl_met = dbfs_cache_complexity_threshold is None or complexity >= dbfs_cache_complexity_threshold
         mult_met = dbfs_cache_multiplier_threshold is None or multiplier >= dbfs_cache_multiplier_threshold
@@ -1110,11 +1178,103 @@ def cacheToDbfs(
         else:
             log.info(f"Skip cache: {reason}")
             return self
-    else:
-        add_to_dbfs_cache_queue(self)  # Use the function instead of directly appending
-        return self
+    # This part of the original 'else' for deferred is now handled at the beginning of the function.
+    # else:
+    #     add_to_dbfs_cache_queue(self)
+    #     return self
 
 # Ensure all code paths in cacheToDbfs return a DataFrame
+
+def backup_spark_cached_to_dbfs(
+    spark_session: SparkSession,
+    specific_dfs: Optional[List[DataFrame]] = None,
+    unpersist_after_backup: bool = False,
+    verbose: bool = False
+) -> None:
+    """
+    Persists Spark-cached DataFrames (tracked by this library or explicitly provided) to DBFS.
+
+    Args:
+        spark_session: The active SparkSession.
+        specific_dfs: An optional list of specific DataFrames to back up.
+                      If None, attempts to back up all DataFrames previously Spark-cached
+                      by this library's cacheToDbfs method and still in scope.
+        unpersist_after_backup: If True, unpersists the DataFrame from Spark's memory
+                                 after a successful backup to DBFS.
+        verbose: If True, logs more detailed metadata comparison.
+    """
+    if spark_session is None:
+        log.error("backup_spark_cached_to_dbfs: SparkSession not available.")
+        return
+
+    dfs_to_process = []
+    if specific_dfs is not None:
+        dfs_to_process = specific_dfs
+        log.info(f"Starting backup for {len(dfs_to_process)} explicitly provided Spark-cached DataFrames.")
+    else:
+        dfs_to_process = list(_spark_cached_dfs_registry)
+        log.info(f"Starting backup for {len(dfs_to_process)} tracked Spark-cached DataFrames still in scope.")
+
+    if not dfs_to_process:
+        log.info("No Spark-cached DataFrames to back up.")
+        return
+
+    for i, df_to_backup in enumerate(dfs_to_process):
+        if not isinstance(df_to_backup, DataFrame):
+            log.warning(f"Item {i+1} is not a DataFrame, skipping backup.")
+            continue
+        if not is_spark_cached(df_to_backup):
+            log.warning(f"DataFrame {i+1} (hash: {get_table_hash(df_to_backup) if df_to_backup else 'N/A'}) is no longer Spark-cached, skipping backup.")
+            continue
+
+        log.info(f"Backing up DataFrame {i+1}/{len(dfs_to_process)} to DBFS...")
+        try:
+            # We need to recalculate query_plan and input_dir_mod_datetime for the write
+            current_query_plan = get_query_plan(df_to_backup)
+            input_info = get_input_dir_mod_datetime(df_to_backup)
+
+            if input_info == {"<direct_data_cache>": True}:
+                log.info(f"DataFrame {i+1} is from a direct data cache source. Backup to standard DBFS cache is usually not needed. Skipping.")
+                continue
+
+            input_dir_mod_datetime_casted: Dict[str, datetime] = {}
+            if isinstance(input_info, dict) and not input_info.get("<direct_data_cache>", False):
+                input_dir_mod_datetime_casted = input_info # type: ignore
+            else:
+                log.warning(f"backup_spark_cached_to_dbfs: Unexpected input_info for DataFrame {i+1}. Defaulting to empty dict for metadata.")
+                input_dir_mod_datetime_casted = {}
+
+            # Use write_dbfs_cache to persist it.
+            # write_dbfs_cache itself returns the DataFrame read from cache, we don't need it here.
+            write_dbfs_cache(
+                df_to_backup,
+                replace=True, # Assuming overwrite is desired for backup
+                query_plan=current_query_plan,
+                input_dir_mod_datetime=input_dir_mod_datetime_casted,
+                hash_name=None, # Let it calculate
+                cache_path=config.SPARK_CACHE_DIR,
+                verbose=verbose
+            )
+            log.info(f"Successfully backed up DataFrame {i+1} to DBFS.")
+
+            if unpersist_after_backup:
+                log.info(f"Unpersisting DataFrame {i+1} from Spark cache after successful backup.")
+                df_to_backup.unpersist()
+
+        except Exception as e:
+            log.error(f"Error backing up DataFrame {i+1} to DBFS: {e}", exc_info=True)
+
+    log.info(f"Finished backup process for {len(dfs_to_process)} DataFrames.")
+
+
+def clear_spark_cached_registry() -> None:
+    """Clears the internal registry of Spark-cached DataFrames."""
+    global _spark_cached_dfs_registry
+    count = len(_spark_cached_dfs_registry)
+    _spark_cached_dfs_registry.clear()
+    log.info(f"Cleared {count} DataFrames from the Spark-cached registry.")
+
+
 def clearDbfsCache(self: DataFrame) -> None:
     """Clears the standard DBFS cache entry for this DataFrame."""
     try:
@@ -1221,6 +1381,20 @@ def extend_dataframe_methods(
     DataFrame.cacheToDbfs = cacheToDbfs # type: ignore
     DataFrame.cacheToDbfsIfTriggered = cacheToDbfsIfTriggered # type: ignore
     DataFrame.clearDbfsCache = clearDbfsCache # type: ignore
+    # Add new backup method to SparkSession for convenience, though it takes session as arg
+    if not hasattr(spark_session, "backupSparkCachedToDbfs"):
+        # Binding directly to spark_session instance
+        spark_session.backupSparkCachedToDbfs = types.MethodType( # type: ignore[attr-defined]
+            lambda s, specific_dfs=None, unpersist_after_backup=False, verbose=False: backup_spark_cached_to_dbfs(
+                s, specific_dfs, unpersist_after_backup, verbose
+            ),
+            spark_session
+        )
+        log.info("Attached 'backupSparkCachedToDbfs' to SparkSession instance.")
+    if not hasattr(spark_session, "clearSparkCachedRegistry"):
+        spark_session.clearSparkCachedRegistry = clear_spark_cached_registry # type: ignore[attr-defined]
+        log.info("Attached 'clearSparkCachedRegistry' to SparkSession instance.")
+
 
     log.info("DataFrame extensions initialized.")
 

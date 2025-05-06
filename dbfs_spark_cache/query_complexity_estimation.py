@@ -1,6 +1,6 @@
 """Query complexity estimation utilities."""
 import logging
-from typing import List, Optional
+from typing import List
 
 from pyspark.sql import DataFrame
 

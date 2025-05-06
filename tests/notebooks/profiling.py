@@ -126,5 +126,3 @@ print(f"\n_hash_input_data time: {hash_time:.4f} s, ({second_hash_time:.4f}s sec
 print(f"Spark createDataFrame time: {spark_time:.4f} s")
 
 # COMMAND ----------
-
-
