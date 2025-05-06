@@ -1205,16 +1205,26 @@ def extend_dataframe_methods(
 
     log.info("DataFrame extensions initialized.")
 
+# Helper to detect if running on a Databricks serverless cluster
+def is_serverless_cluster() -> bool:
+    # Allow override for testing
+    if os.environ.get("DATABRICKS_RUNTIME_VERSION", "").startswith("client."):
+        return True
+    else:
+        return False
+
 # Utility function to extract hash from metadata (needed by tests)
 def get_hash_from_metadata(metadata_txt: str) -> Optional[str]:
     """
     Extracts hash from metadata text containing table references.
 
-    Looks for patterns like spark_catalog.{db_name}.{hash} in the metadata.
+    Looks for patterns like spark_catalog.{db_name}.{hash} or hive_metastore.{db_name}.{hash} in the metadata.
+    Uses hive_metastore if running on serverless, otherwise spark_catalog.
     """
     import re
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-    pattern = rf"spark_catalog\.{db_name}\.([a-f0-9]{{32}})"
+    catalog_prefix = "hive_metastore" if is_serverless_cluster() else "spark_catalog"
+    pattern = rf"{catalog_prefix}\.{db_name}\.([a-f0-9]{{32}})"
     match = re.search(pattern, metadata_txt)
     if match:
         return match.group(1)
