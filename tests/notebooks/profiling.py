@@ -82,10 +82,6 @@ setup_dependencies(REPO_PATH, spark)  # noqa: F821
 
 # COMMAND ----------
 
-dbutils.library.restartPython()  # noqa: F821
-
-# COMMAND ----------
-
 # Measure the extra latency incurred by createCachedDataFrame
 
 import pandas as pd
@@ -130,3 +126,5 @@ print(f"\n_hash_input_data time: {hash_time:.4f} s, ({second_hash_time:.4f}s sec
 print(f"Spark createDataFrame time: {spark_time:.4f} s")
 
 # COMMAND ----------
+
+
