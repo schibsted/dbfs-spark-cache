@@ -1,27 +1,42 @@
 """Query complexity estimation utilities."""
-from typing import List
+import logging
+from typing import List, Optional
 
 from pyspark.sql import DataFrame
 
+# Import dbutils and get_quedy_plan grom_cach fr moduleom caching module
+try:
+    from databricks.sdk.runtime import dbutils
+except ImportError:
+    dbutils = None # type: ignore[assignment,misc]
+
+log = logging.getLogger(__name__)
+
 
 def get_input_file_sizes(df: DataFrame) -> List[float]:
-    """Get sizes of input files in GB."""
+    """Get sizes of input files in GB using dbutils.fs.ls."""
+    if dbutils is None:
+        log.warning("dbutils not available, cannot get input file sizes.")
+        return []
+
     input_files = df.inputFiles()
     file_sizes = []
     for file_path in input_files:
         try:
-            # Ensure SparkContext is available
-            jsc = df.sparkSession._jsc
-            if jsc is None:
-                raise Exception("Java SparkContext not available")
-
-            path = df.sparkSession._jvm.org.apache.hadoop.fs.Path(file_path)  # type: ignore[union-attr]
-            fs = path.getFileSystem(jsc.hadoopConfiguration())
-            file_size = float(fs.getFileStatus(path).getLen())
-            # Convert bytes to GB
-            file_sizes.append(file_size / (1024 * 1024 * 1024))
-        except Exception:
-            # Skip files that can't be accessed
+            # Use dbutils.fs.ls to get file status which includes size
+            # dbutils.fs.ls returns a list of FileInfo objects
+            file_info_list = dbutils.fs.ls(file_path)
+            if file_info_list:
+                # Assuming inputFiles returns actual file paths, not directories
+                # If it returns directories, we might need to list recursively
+                file_size = float(file_info_list[0].size)
+                # Convert bytes to GB
+                file_sizes.append(file_size / (1024 * 1024 * 1024))
+            else:
+                 log.warning(f"dbutils.fs.ls returned empty list for {file_path}. Skipping size.")
+        except Exception as e:
+            # Skip files that can't be accessed or listed
+            log.warning(f"Could not get file size for {file_path} using dbutils.fs.ls: {e}. Skipping.")
             continue
     return file_sizes
 
@@ -142,7 +157,7 @@ def _calculate_complexity_from_plan(query_plan: str, total_size: float) -> tuple
     return complexity, multiplier
 
 
-def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:  # Modified return type
+def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:
     """Calculate total compute complexity and multiplier based on input data size and query plan.
 
     The complexity is estimated as the sum of input file sizes in GB
@@ -174,15 +189,13 @@ def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:  #
     if not total_size:
         return 0.0, 1.0, 0.0  # Return default multiplier and zero size
 
-    # Get the analyzed logical query plan
-    try:
-        # Use analyzed plan for estimation before optimization
-        query_plan_str = df._jdf.queryExecution().analyzed().toString().lower()
-    except Exception:
-        # If plan cannot be accessed (e.g., during DataFrame creation before action)
-        # return base complexity (size * 1.0). Consider logging this.
-        # logger.warning("Could not access query plan for complexity estimation.")
-        return total_size, 1.0, total_size  # Equivalent to total_size * 1.0
+    from dbfs_spark_cache.caching import get_query_plan
+    query_plan_str = get_query_plan(df).lower()
+
+    # If get_query_plan returned an error string, we can't estimate complexity
+    if query_plan_str.startswith("error:"):
+        log.warning(f"Could not get query plan for complexity estimation: {query_plan_str}. Returning base complexity.")
+        return total_size, 1.0, total_size
 
     # Delegate the core calculation and return the tuple with total_size
     complexity, multiplier = _calculate_complexity_from_plan(query_plan_str, total_size)

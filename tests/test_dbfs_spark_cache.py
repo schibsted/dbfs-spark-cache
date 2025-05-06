@@ -97,17 +97,15 @@ def test_estimate_compute_complexity():
     with patch.object(qce, "get_input_file_sizes", return_value=[1.0]):
         for query_plan, expected_multiplier in test_cases:
             mock_df = MagicMock()
-            # Patch the query plan string
-            mock_df._jdf.queryExecution().analyzed().toString.return_value = query_plan
-            # Call the real function
-            _, multiplier, _ = qce.estimate_compute_complexity(mock_df)
-            # Complexity should be 1.0 * expected_multiplier
-            # Use a more lenient tolerance for floating-point comparison
-            # assert abs(multiplier - expected_multiplier) < 0.01, f"Multiplier failed for plan: {query_plan}"
-            case_failed = not abs(multiplier - expected_multiplier) < 0.01
-            if case_failed:
-                print(f"Failed for plan: {query_plan}, multiplier: {multiplier}, expected: {expected_multiplier}")
-            fail = fail or case_failed
+            # Patch get_query_plan to return the desired query plan string
+            with patch("dbfs_spark_cache.caching.get_query_plan", return_value=query_plan):
+                _, multiplier, _ = qce.estimate_compute_complexity(mock_df)
+                # Complexity should be 1.0 * expected_multiplier
+                # Use a more lenient tolerance for floating-point comparison
+                case_failed = not abs(multiplier - expected_multiplier) < 0.01
+                if case_failed:
+                    print(f"Failed for plan: {query_plan}, multiplier: {multiplier}, expected: {expected_multiplier}")
+                fail = fail or case_failed
 
     assert not fail, "Some tests failed"
 
