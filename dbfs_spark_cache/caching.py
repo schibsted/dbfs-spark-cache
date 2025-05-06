@@ -408,10 +408,10 @@ def get_table_hash(df: DataFrame) -> str:
     # Use the public API get_query_plan instead of _jdf
     plan_str = get_query_plan(df)
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-    # Regex to find 'spark_catalog.{db_name}.data_hash' in the cleaned plan string
+    # Regex to find 'spark_catalog.{db_name}.data_hash' or 'hive_metastore.{db_name}.data_hash' in the cleaned plan string
     # This pattern assumes the cleaned plan includes fully qualified table names.
     # Might need adjustment based on the actual output of the cleaned get_query_plan.
-    pattern = rf"spark_catalog\.{re.escape(db_name)}\.(data_[0-9a-fA-F]+)"
+    pattern = rf"{get_catalog_name()}\.{re.escape(db_name)}\.(data_[0-9a-fA-F]+)"
     match = re.search(pattern, plan_str)
     if match:
         data_hash_name = match.group(1)
@@ -607,7 +607,7 @@ def get_input_dir_mod_datetime(df: DataFrame) -> Union[Dict[str, datetime], Dict
     if not input_files:
         log.debug("DataFrame has no input files according to df.inputFiles(). Checking plan.")
         plan = get_query_plan(df)
-        direct_cache_table_pattern = rf"spark_catalog\.{config.CACHE_DATABASE}\.data_[a-f0-9]{{32}}"
+        direct_cache_table_pattern = rf"{get_catalog_name()}\.{config.CACHE_DATABASE}\.data_[a-f0-9]{{32}}"
         if re.search(direct_cache_table_pattern, plan):
              log.debug("Detected direct data cache source via query plan for empty inputFiles.")
              return {"<direct_data_cache>": True}
@@ -1202,6 +1202,10 @@ def extend_dataframe_methods(
     DataFrame.clearDbfsCache = clearDbfsCache # type: ignore
 
     log.info("DataFrame extensions initialized.")
+    return DataFrame
+
+def get_catalog_name() -> str:
+    return "hive_metastore" if is_serverless_cluster() else "spark_catalog"
 
 # Helper to detect if running on a Databricks serverless cluster
 def is_serverless_cluster() -> bool:
@@ -1221,7 +1225,7 @@ def get_hash_from_metadata(metadata_txt: str) -> Optional[str]:
     """
     import re
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-    catalog_prefix = "hive_metastore" if is_serverless_cluster() else "spark_catalog"
+    catalog_prefix = get_catalog_name()
     pattern = rf"{catalog_prefix}\.{db_name}\.([a-f0-9]{{32}})"
     match = re.search(pattern, metadata_txt)
     if match:
