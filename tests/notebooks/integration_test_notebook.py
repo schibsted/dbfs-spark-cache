@@ -162,6 +162,13 @@ print(f"Spark version: {spark.version}")
 print(f"SPARK_CACHE_DIR: {config.SPARK_CACHE_DIR}")
 print(f"CACHE_DATABASE: {config.CACHE_DATABASE}")
 
+# --- Setup done ---
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Start of tests
+
 # COMMAND ----------
 
 help(extend_dataframe_methods)
