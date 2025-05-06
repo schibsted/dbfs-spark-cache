@@ -817,10 +817,8 @@ def read_dbfs_cache_if_exist(
             metadata_exists = False
 
     if not metadata_exists:
-        # In test/mock environments, if local file exists and spark is a MagicMock, return the mock table
-        if hasattr(spark, "read") and hasattr(spark.read, "table"):
-            log.info(f"Test environment: returning mock table for {table_name} (local file fallback)")
-            return spark.read.table(table_name)
+        # In production/serverless, just return None for cache miss
+        log.info(f"Cache miss: metadata file {metadata_file_path} does not exist.")
         return None
 
     # Metadata exists, now check if table exists

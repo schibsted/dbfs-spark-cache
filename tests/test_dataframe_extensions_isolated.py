@@ -100,8 +100,7 @@ def test_read_dbfs_cache_if_exist_cache_hit(mock_dbutils_ls, mock_dataframe, moc
     mock_dbutils_ls.return_value = []
     with patch('dbfs_spark_cache.caching.get_input_dir_mod_datetime', autospec=True) as mock_get_input_dir_mod_datetime, \
          patch('dbfs_spark_cache.caching.get_query_plan', autospec=True) as mock_get_query_plan, \
-         patch('os.path.exists', autospec=True) as mock_exists, \
-         patch('builtins.open', new_callable=mock_open) as mock_file, \
+         patch('dbfs_spark_cache.caching.dbutils') as mock_dbutils, \
          patch('dbfs_spark_cache.caching.spark', mock_spark_session):  # Patch spark directly in caching module
 
         # Setup mocks - convert pandas Timestamp to datetime for compatibility
@@ -109,18 +108,16 @@ def test_read_dbfs_cache_if_exist_cache_hit(mock_dbutils_ls, mock_dataframe, moc
         mock_dt = datetime(2023, 1, 1)
         mock_get_input_dir_mod_datetime.return_value = {"s3://bucket/data": mock_dt}
         mock_get_query_plan.return_value = "mock_query_plan"
-        mock_exists.return_value = True
 
         # Hardcode the metadata content to match exactly what would be returned
-        # This avoids type issues with the test and ensures consistent format
-        metadata_content = """INPUT SOURCES MODIFICATION DATETIMES:
+        metadata_content = b"""INPUT SOURCES MODIFICATION DATETIMES:
 s3://bucket/data: 2023-01-01 00:00:00
 
 DATAFRAME QUERY PLAN:
 mock_query_plan"""
 
-        # Mock the file read operation to return our metadata
-        mock_file.return_value.__enter__.return_value.read.return_value = metadata_content
+        # Patch dbutils.fs.head to simulate metadata file presence
+        mock_dbutils.fs.head.return_value = metadata_content
 
         # Mock spark.read.table to return a mock table
         mock_table = MagicMock()
