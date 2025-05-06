@@ -351,43 +351,6 @@ def test_wcd_skip_display(mock_dbutils_ls, mock_dataframe):
         display_mock.assert_not_called()
         assert result == mock_dataframe
 
-@pytest.mark.skip("Skipping write_dbfs_cache core functionality test in non-JVM environment")
-@patch('dbutils.fs.ls')
-def test_write_dbfs_cache_core_functionality(mock_dbutils_ls, mock_dataframe, mock_spark_session, temp_test_dir):  # Renamed test
-    """Test write_dbfs_cache core functionality without JVM, using dbutils.fs operations."""
-    mock_dbutils_ls.return_value = []
-    with patch('os.path.exists') as mock_exists, \
-         patch('dbfs_spark_cache.caching.dbutils') as mock_dbutils, \
-         patch('dbfs_spark_cache.caching.get_input_dir_mod_datetime') as mock_get_input_datetime, \
-         patch('dbfs_spark_cache.caching.get_query_plan') as mock_get_query_plan, \
-         patch('dbfs_spark_cache.caching.spark', mock_spark_session):
-
-        # Setup mocks
-        mock_exists.return_value = False
-        mock_get_input_datetime.return_value = {"s3://test-bucket/data": pd.Timestamp("2023-01-01")}
-        mock_get_query_plan.return_value = "SELECT * FROM test_table"
-        # Setup the full write.format().saveAsTable() chain
-        mock_format = MagicMock()
-        mock_dataframe.write.format.return_value = mock_format
-        mock_dataframe.write.format.return_value = mock_format
-
-        # Setup dbutils.fs.mkdirs as a MagicMock
-        mock_dbutils.fs.mkdirs = MagicMock()
-
-        # Call the function directly
-        result = write_dbfs_cache(mock_dataframe, replace=False) # Changed from dbfs_cache
-
-        # Assertions
-        # Expect at least one call to create metadata directory
-        assert mock_dbutils.fs.mkdirs.call_count >= 1
-        mock_dataframe.write.format.assert_any_call('delta')
-
-        # Assert metadata was written via dbutils.fs.put
-        assert mock_dbutils.fs.put.call_count >= 1
-        # Assert the result is a mock object, not necessarily the *same* input mock
-        assert isinstance(result, MagicMock)
-        # Optionally, assert it's not the original mock if that's important
-        # assert result is not mock_dataframe
 @patch('dbutils.fs.ls')
 def test_write_dbfs_cache_with_existing_identical_cache(mock_dbutils_ls, mock_dataframe, mock_spark_session, temp_test_dir): # Renamed test
     """Test write_dbfs_cache when cache exists and is identical.""" # Renamed test

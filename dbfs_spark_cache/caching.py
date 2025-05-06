@@ -361,6 +361,30 @@ def get_cached_dataframe_metadata(num_threads=None):
 
 
 # --- Hashing Utility ---
+
+def _find_catalog_table_pattern_in_text(text: str, db_name: str, table_prefix: str = "") -> Optional[str]:
+    """
+    Searches for table patterns like 'hive_metastore.db.prefix_hash' or 'spark_catalog.db.prefix_hash'
+    in the given text. Returns the full table identifier (prefix + hash) if found.
+    """
+    # Check for 'hive_metastore' pattern first.
+    # The capturing group (group 1) will capture (table_prefix + hash_value)
+    pattern_hive = rf"hive_metastore\.{re.escape(db_name)}\.({re.escape(table_prefix)}[a-f0-9]{{32}})"
+    match_hive = re.search(pattern_hive, text)
+    if match_hive:
+        log.debug(f"Found pattern with 'hive_metastore': {match_hive.group(1)}")
+        return match_hive.group(1)
+
+    # If not found, check for 'spark_catalog' pattern.
+    pattern_spark = rf"spark_catalog\.{re.escape(db_name)}\.({re.escape(table_prefix)}[a-f0-9]{{32}})"
+    match_spark = re.search(pattern_spark, text)
+    if match_spark:
+        log.debug(f"Found pattern with 'spark_catalog': {match_spark.group(1)}")
+        return match_spark.group(1)
+
+    log.debug(f"Could not find pattern for prefix '{table_prefix}' with 'hive_metastore' or 'spark_catalog' in text.")
+    return None
+
 def _hash_input_data(data: Union[pd.DataFrame, List[Any], Tuple[Any, ...]]) -> str:
     """Hashes input data (Pandas DF or list/tuple of dicts/Rows) using fast pandas hashing."""
     if isinstance(data, (list, tuple)):
@@ -408,20 +432,16 @@ def get_table_hash(df: DataFrame) -> str:
     # Use the public API get_query_plan instead of _jdf
     plan_str = get_query_plan(df)
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-    # Regex to find 'spark_catalog.{db_name}.data_hash' or 'hive_metastore.{db_name}.data_hash' in the cleaned plan string
-    # This pattern assumes the cleaned plan includes fully qualified table names.
-    # Might need adjustment based on the actual output of the cleaned get_query_plan.
-    pattern = rf"{get_catalog_name()}\.{re.escape(db_name)}\.(data_[0-9a-fA-F]+)"
-    match = re.search(pattern, plan_str)
-    if match:
-        data_hash_name = match.group(1)
-        log.info(f"Identified direct data cache read from plan: {data_hash_name}")
-        return data_hash_name # Return the specific data hash
-    # else: # Optional: log if no direct data cache pattern found
-    #     log.debug(f"No direct data cache pattern found in plan:\n{plan_str}")
 
+    # Use the helper to find 'data_' prefixed hashes, checking both hive_metastore and spark_catalog
+    data_hash_match = _find_catalog_table_pattern_in_text(plan_str, db_name, "data_")
+    if data_hash_match:
+        log.info(f"Identified direct data cache read from plan: {data_hash_match}")
+        return data_hash_match # data_hash_match is the table_prefix + hash, e.g., "data_xxxx"
+    # else: # Optional: log if no direct data cache pattern (data_ prefix) found in plan:
+    #     log.debug(f"No direct data cache pattern (data_ prefix) found in plan:\n{plan_str}")
 
-    # --- Original logic as fallback ---
+    # --- Original logic as fallback (for non-'data_' prefixed tables) ---
     input_dir_mod_datetime_raw: Union[Dict[str, datetime], Dict[str, bool]] = get_input_dir_mod_datetime(df)
     # Explicitly check the type and filter out the boolean marker case
     input_dir_mod_datetime: Dict[str, datetime] = {}
@@ -607,8 +627,9 @@ def get_input_dir_mod_datetime(df: DataFrame) -> Union[Dict[str, datetime], Dict
     if not input_files:
         log.debug("DataFrame has no input files according to df.inputFiles(). Checking plan.")
         plan = get_query_plan(df)
-        direct_cache_table_pattern = rf"{get_catalog_name()}\.{config.CACHE_DATABASE}\.data_[a-f0-9]{{32}}"
-        if re.search(direct_cache_table_pattern, plan):
+        db_name = getattr(config, "CACHE_DATABASE", "spark_cache") # Ensure db_name is available
+        # Use the helper to find 'data_' prefixed hashes, checking both hive_metastore and spark_catalog
+        if _find_catalog_table_pattern_in_text(plan, db_name, "data_"):
              log.debug("Detected direct data cache source via query plan for empty inputFiles.")
              return {"<direct_data_cache>": True}
         else:
@@ -1018,7 +1039,7 @@ def cacheToDbfs(
     if not deferred:
         current_query_plan = get_query_plan(self)
         # --- Add check for ExistingRDD ---
-        if "Scan ExistingRDD" in current_query_plan:
+        if ("Scan ExistingRDD" in current_query_plan) or ("LocalTableScan" in current_query_plan):
             log.info("Skipping cache for DataFrame derived from RDD (Scan ExistingRDD found in plan).")
             return self
         # --- End check ---
@@ -1202,10 +1223,6 @@ def extend_dataframe_methods(
     DataFrame.clearDbfsCache = clearDbfsCache # type: ignore
 
     log.info("DataFrame extensions initialized.")
-    return DataFrame
-
-def get_catalog_name() -> str:
-    return "hive_metastore" if is_serverless_cluster() else "spark_catalog"
 
 # Helper to detect if running on a Databricks serverless cluster
 def is_serverless_cluster() -> bool:
@@ -1220,14 +1237,27 @@ def get_hash_from_metadata(metadata_txt: str) -> Optional[str]:
     """
     Extracts hash from metadata text containing table references.
 
-    Looks for patterns like spark_catalog.{db_name}.{hash} or hive_metastore.{db_name}.{hash} in the metadata.
-    Uses hive_metastore if running on serverless, otherwise spark_catalog.
+    Looks for patterns like {catalog}.{db_name}.{hash} in the metadata.
+    It checks for 'hive_metastore' first, and if not found,
+    it checks for 'spark_catalog'. This makes it robust to variations
+    in how the catalog is represented in query plans.
     """
     import re
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-    catalog_prefix = get_catalog_name()
-    pattern = rf"{catalog_prefix}\.{db_name}\.([a-f0-9]{{32}})"
-    match = re.search(pattern, metadata_txt)
-    if match:
-        return match.group(1)
+
+    # Check for 'hive_metastore' pattern first.
+    pattern_hive = rf"hive_metastore\.{re.escape(db_name)}\.([a-f0-9]{{32}})"
+    match_hive = re.search(pattern_hive, metadata_txt)
+    if match_hive:
+        log.debug(f"Extracted hash '{match_hive.group(1)}' using 'hive_metastore' pattern from metadata.")
+        return match_hive.group(1)
+
+    # If not found with hive_metastore, check for 'spark_catalog' pattern.
+    pattern_spark = rf"spark_catalog\.{re.escape(db_name)}\.([a-f0-9]{{32}})"
+    match_spark = re.search(pattern_spark, metadata_txt)
+    if match_spark:
+        log.debug(f"Extracted hash '{match_spark.group(1)}' using 'spark_catalog' pattern from metadata.")
+        return match_spark.group(1)
+
+    log.debug("Could not extract hash from metadata using 'hive_metastore' or 'spark_catalog' patterns. Full metadata searched.")
     return None

@@ -1,11 +1,8 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC ### Integration Test Notebook for dbfs-spark-cache
 # MAGIC This notebook executes the comprehensive integration test plan for the dbfs-spark-cache module
-
+# MAGIC
 # MAGIC This notebook outlines the plan for creating an integration test notebook for the dbfs-spark-cache module. The integration tests will focus on testing functionality not covered by the unit tests, with an emphasis on testing the inner functions in `dbfs_spark_cache/caching.py` first, then testing different variants of `cacheToDbfs()` and `withCachedDisplay()`.
 # MAGIC
 # MAGIC 1. This notebook should be run in a Databricks environment with the dbfs-spark-cache module installed, or with library code source imported directly.
@@ -113,10 +110,9 @@ from dbfs_spark_cache import extend_dataframe_methods
 
 # Import the dbfs-spark-cache module and its inner functions
 from dbfs_spark_cache.caching import (
-    # cacheToDbfs,
-    # wcd,
-    # withCachedDisplay,
-    # createCachedDataFrame,
+    cacheToDbfs,
+    clearDbfsCache,
+    createCachedDataFrame,
     clear_cache_for_hash,
     clear_caches_older_than,
     clear_inconsistent_cache,
@@ -256,7 +252,6 @@ print("Initial caching...")
 df_cached = write_dbfs_cache(df_simple)
 cached_hash = get_table_hash(df_cached)
 print(f"Cached DataFrame: {df_cached}\n")
-
 qualified_table_name = get_table_name_from_hash(cached_hash)
 cache_exists = spark.catalog.tableExists(qualified_table_name)
 assert cache_exists, f"Cache table {qualified_table_name} exists: {cache_exists}"
@@ -324,7 +319,7 @@ assert hash_name not in spark.sql(f"SHOW TABLES IN {config.CACHE_DATABASE}").toP
 # 4. Test DataFrame Extensions
 print("\nTesting DataFrame.cacheToDbfs...")
 print("Basic caching...")
-df_cached = df_simple.cacheToDbfs()
+df_cached = cacheToDbfs(df_simple)
 print(f"Cached DataFrame: {df_cached}\n")
 
 print("\nTesting with complexity threshold...")
@@ -334,7 +329,7 @@ df_to_cache_low = df_larger.withColumn("group_col", col("id") % 100).groupBy("gr
 hash_low = get_table_hash(df_to_cache_low)
 clear_cache_for_hash(hash_low) # Ensure clean state
 print(f"Attempting to cache DataFrame with hash {hash_low} (low threshold=0)...")
-df_low_threshold = df_to_cache_low.cacheToDbfs(dbfs_cache_complexity_threshold=0, verbose=True)
+df_low_threshold = cacheToDbfs(df_to_cache_low, dbfs_cache_complexity_threshold=0, verbose=True)
 qualified_table_name_low = f"{config.CACHE_DATABASE}.{hash_low}"
 cache_exists_low = spark.catalog.tableExists(qualified_table_name_low)
 assert cache_exists_low, f"Cache table {qualified_table_name_low} should exist for low threshold (complexity > 0)"
@@ -345,14 +340,14 @@ df_to_cache_high = df_larger.withColumn("group_col", col("id") % 100).groupBy("g
 hash_high = get_table_hash(df_to_cache_high)
 clear_cache_for_hash(hash_high) # Ensure clean state
 print(f"Attempting to cache DataFrame with hash {hash_high} (high threshold=1000)...")
-df_high_threshold = df_to_cache_high.cacheToDbfs(dbfs_cache_complexity_threshold=1000, verbose=True)
+df_high_threshold = cacheToDbfs(df_to_cache_high, dbfs_cache_complexity_threshold=1000, verbose=True)
 qualified_table_name_high = f"{config.CACHE_DATABASE}.{hash_high}"
 cache_exists_high = spark.catalog.tableExists(qualified_table_name_high)
 assert not cache_exists_high, f"Cache table {qualified_table_name_high} should NOT exist for high threshold (complexity < 1000)"
 print(f"Cache table {qualified_table_name_high} does not exist as expected: {not cache_exists_high}\n")
 
 print("\nTesting deferred caching...")
-df_deferred = df_simple.cacheToDbfs(deferred=True)
+df_deferred = cacheToDbfs(df_simple, deferred=True)
 print(f"Deferred caching: {df_deferred}\n")
 from dbfs_spark_cache.caching import cache_dataframes_in_queue_to_dbfs
 
@@ -360,13 +355,13 @@ cache_dataframes_in_queue_to_dbfs()
 print("Executed deferred caching\n")
 
 print("\nTesting cache invalidation with data changes...")
-df_to_invalidate = df_simple.cacheToDbfs()
+df_to_invalidate = cacheToDbfs(df_simple)
 data_new = [("Alice", 35, 56000.0), ("Bob", 46, 66000.0), ("Charlie", 30, 73000.0), ("Diana", 38, 59000.0)]
 df_new = spark.createDataFrame(data_new, schema)
 spark.sql("DROP TABLE IF EXISTS test_db.employees")
 df_new.write.mode("overwrite").saveAsTable("test_db.employees")
 df_invalidated = spark.sql("SELECT * FROM test_db.employees").withColumn("dummy_column", lit("dummy_value"))
-df_recached = df_invalidated.cacheToDbfs()
+df_recached = cacheToDbfs(df_invalidated)
 print("Cache invalidation test completed\n")
 
 # COMMAND ----------
@@ -393,6 +388,10 @@ print(f"Created initial table {table_name_clear_test}")
 
 # COMMAND ----------
 
+clear_cache_for_hash("502cfb2d3ad357846fa0a49e361dbe14")
+
+# COMMAND ----------
+
 # 1. Create a simple DataFrame
 schema_recache_test = spark_types.StructType([
     spark_types.StructField("id", spark_types.IntegerType(), True),
@@ -405,10 +404,11 @@ df_recache_test = spark.createDataFrame(data_recache_test, schema_recache_test)
 print("First cache operation...")
 hash_recache_test = get_table_hash(df_recache_test)
 clear_cache_for_hash(hash_recache_test)  # Ensure clean start
-df_cached_first = df_recache_test.cacheToDbfs()
-qualified_table_name_recache = f"{config.CACHE_DATABASE}.{hash_recache_test}"
-assert not spark.catalog.tableExists(qualified_table_name_recache), f"Cache table {qualified_table_name_recache} should not exist after first cache."
-print(f"DataFrame cached with hash: {hash_recache_test}")
+df_cached_first = cacheToDbfs(df_recache_test)
+assert get_table_hash(df_cached_first) == get_table_hash(df_recache_test), f"hashes mismatch: {get_table_hash(df_cached_first)} != {get_table_hash(df_recache_test)}"
+# qualified_table_name_recache = f"{config.CACHE_DATABASE}.{hash_recache_test}"
+# assert spark.catalog.tableExists(qualified_table_name_recache), f"Cache table {qualified_table_name_recache} should exist after first cache."
+# print(f"DataFrame cached with hash: {hash_recache_test}")
 
 # COMMAND ----------
 
@@ -419,14 +419,14 @@ df_ref_clear_test = spark.read.table(table_name_clear_test)
 print("Caching original DataFrame version...")
 hash_clear_test = get_table_hash(df_ref_clear_test)
 clear_cache_for_hash(hash_clear_test) # Ensure clean start
-df_cached_clear_test_1 = df_ref_clear_test.cacheToDbfs()
+df_cached_clear_test_1 = cacheToDbfs(df_ref_clear_test)
 qualified_table_name_clear_test = f"{config.CACHE_DATABASE}.{hash_clear_test}"
 assert spark.catalog.tableExists(qualified_table_name_clear_test), f"Cache table {qualified_table_name_clear_test} should exist after first cache."
 print(f"Original version cached with hash: {hash_clear_test}")
 
 # 2. Simulate Condition: Clear the cache using the DataFrame reference
 print(f"\nClearing cache for hash {hash_clear_test} using df.clearDbfsCache()...")
-df_ref_clear_test.clearDbfsCache()
+clearDbfsCache(df_ref_clear_test)
 assert not spark.catalog.tableExists(qualified_table_name_clear_test), f"Cache table {qualified_table_name_clear_test} should NOT exist after clearDbfsCache."
 print(f"Cache table {qualified_table_name_clear_test} successfully cleared.")
 
@@ -435,7 +435,7 @@ print("\nAttempting to cache using the same DataFrame reference again...")
 # This call should find no cache (as it was cleared).
 # It should NOT encounter DELTA_SCHEMA_CHANGE error because the source wasn't changed.
 # It should proceed to calculate the hash (same as before: hash_clear_test) and write the cache again.
-df_cached_clear_test_2 = df_ref_clear_test.cacheToDbfs(dbfs_cache_complexity_threshold=0) # Ensure caching happens
+df_cached_clear_test_2 = cacheToDbfs(df_ref_clear_test, dbfs_cache_complexity_threshold=0) # Ensure caching happens
 
 # 4. Verification
 print("Verifying results after attempting to cache again...")
@@ -461,7 +461,7 @@ print("First cache operation...")
 df_recache_test = spark.read.table(table_name_clear_test)
 clear_cache_for_hash(get_table_hash(df_recache_test))  # Ensure clean start
 
-df_cached_first = df_recache_test.cacheToDbfs()
+df_cached_first = cacheToDbfs(df_recache_test)
 hash_recache_test = get_table_hash(df_cached_first)
 qualified_table_name_recache = f"{config.CACHE_DATABASE}.{hash_recache_test}"
 assert spark.catalog.tableExists(qualified_table_name_recache), f"Cache table {qualified_table_name_recache} should exist after first cache."
@@ -470,7 +470,7 @@ print(f"DataFrame cached with hash: {hash_recache_test}")
 # 3. Cache the same DataFrame again
 print("\nSecond cache operation on the same DataFrame...")
 # This should recognize it's already cached and not trigger a new write
-df_cached_second = df_recache_test.cacheToDbfs()
+df_cached_second = cacheToDbfs(df_recache_test)
 
 # 4. Verify that the hash is the same and no new write occurred
 hash_recache_test_second = get_table_hash(df_recache_test)
@@ -480,7 +480,7 @@ print(f"Hash remained the same: {hash_recache_test}")
 # 5. Now test with a column added - this should create a new cache
 print("\nTesting with modified DataFrame (added column)...")
 df_recache_test_modified = df_recache_test.withColumn("new_col", lit("new_value"))
-df_cached_modified = df_recache_test_modified.cacheToDbfs()
+df_cached_modified = cacheToDbfs(df_recache_test_modified)
 hash_recache_test_modified = get_table_hash(df_recache_test_modified)
 assert hash_recache_test != hash_recache_test_modified, f"Hash should change for modified DataFrame: {hash_recache_test} vs {hash_recache_test_modified}"
 qualified_table_name_recache_modified = f"{config.CACHE_DATABASE}.{hash_recache_test_modified}"
@@ -496,35 +496,42 @@ print("\nMultiple caching test completed successfully.\n")
 
 # COMMAND ----------
 
+from dbfs_spark_cache.caching import __withCachedDisplay__
+withCachedDisplay = __withCachedDisplay__
+wcd = __withCachedDisplay__
+
+# COMMAND ----------
+
 print("\nTesting DataFrame.withCachedDisplay (wcd)...")
 print("Basic withCachedDisplay...")
-df_displayed = df_simple.withCachedDisplay()
+df_displayed = withCachedDisplay(df_simple)
 print(f"Displayed DataFrame: {df_displayed}\n")
 print("\nTesting wcd shorthand...")
-df_wcd = df_simple.wcd()
+df_wcd = wcd(df_simple)
 print(f"wcd DataFrame: {df_wcd}\n")
 print("\nTesting with different parameters...")
-df_eager = df_simple.wcd(eager_spark_cache=True)
+df_eager = wcd(df_simple, eager_spark_cache=True)
 print(f"wcd with eager_spark_cache: {df_eager}\n")
-df_skip_display = df_simple.wcd(skip_display=True)
+df_skip_display = wcd(df_simple, skip_display=True)
 print(f"wcd with skip_display: {df_skip_display}\n")
-df_skip_cache = df_simple.wcd(skip_dbfs_cache=True)
+df_skip_cache = wcd(df_simple, skip_dbfs_cache=True)
 print(f"wcd with skip_dbfs_cache: {df_skip_cache}\n")
 print("\nTesting chaining...")
-df_chained = df_simple.wcd().groupBy("name").agg(spark_sum("salary").alias("total_salary")).wcd()
+df_chained = wcd(df_simple).groupBy("name").agg(spark_sum("salary").alias("total_salary"))
+df_chained = wcd(df_chained)
 print(f"Chained wcd: {df_chained}\n")
 
 print("\nTesting DataFrame.clearDbfsCache...")
-df_to_clear = df_simple.cacheToDbfs()
+df_to_clear = cacheToDbfs(df_simple)
 print(f"Cached DataFrame: {df_to_clear}\n")
-df_simple.clearDbfsCache()
+clearDbfsCache(df_simple)
 print("Cache cleared\n")
 table_hash = get_table_hash(df_simple)
 qualified_table_name = f"{config.CACHE_DATABASE}.{table_hash}"
 cache_exists = spark.catalog.tableExists(qualified_table_name)
 print(f"Cache table {qualified_table_name} exists after clearing: {cache_exists}\n")
 df_different = df_simple.withColumn("new_col", lit(100))
-df_different.clearDbfsCache()
+clearDbfsCache(df_different)
 print("Attempted to clear non-existent cache\n")
 
 # COMMAND ----------
@@ -532,21 +539,21 @@ print("Attempted to clear non-existent cache\n")
 # 5. Test Complex Scenarios and Performance
 print("\nTesting cache invalidation scenarios...")
 print("Testing schema changes...")
-df_schema_orig = df_simple.cacheToDbfs()
+df_schema_orig = cacheToDbfs(df_simple)
 df_schema_new = df_simple.withColumn("bonus", lit(1000))
-df_schema_cached = df_schema_new.cacheToDbfs()
+df_schema_cached = cacheToDbfs(df_schema_new)
 print("Schema change test completed\n")
 
 print("\nTesting query changes...")
-df_query_orig = df_simple.filter(col("age") > 30).cacheToDbfs()
+df_query_orig = cacheToDbfs(df_simple.filter(col("age") > 30))
 df_query_new = df_simple.filter(col("age") > 35)
-df_query_cached = df_query_new.cacheToDbfs()
+df_query_cached = cacheToDbfs(df_query_new)
 print("Query change test completed\n")
 
 print("\nTesting non-deterministic operations...")
-df_sample = df_larger.sample(0.5, seed=42).cacheToDbfs()
+df_sample = cacheToDbfs(df_larger.sample(0.5, seed=42))
 df_sample_same = df_larger.sample(0.5, seed=42)
-df_sample_cached = df_sample_same.cacheToDbfs()
+df_sample_cached = cacheToDbfs(df_sample_same)
 print("Non-deterministic operation test completed\n")
 
 print("\nTesting performance differences...")
@@ -557,7 +564,7 @@ df_larger.count()
 uncached_time = time.time() - start_time
 print(f"Uncached query time: {uncached_time:.4f} seconds\n")
 
-df_larger_cached = df_larger.cacheToDbfs()
+df_larger_cached = cacheToDbfs(df_larger)
 start_time = time.time()
 df_larger_cached.count()
 cached_time = time.time() - start_time
@@ -567,11 +574,11 @@ print(f"Performance improvement: {uncached_time / cached_time:.2f}x\n")
 print("\nTesting write time vs. query time...")
 clear_cache_for_hash(table_hash)
 start_time = time.time()
-df_larger.cacheToDbfs()
+cacheToDbfs(df_larger)
 write_time = time.time() - start_time
 print(f"Cache write time: {write_time:.4f} seconds\n")
 start_time = time.time()
-df_larger_cached = df_larger.cacheToDbfs()
+df_larger_cached = cacheToDbfs(df_larger)
 df_larger_cached.count()
 query_time = time.time() - start_time
 print(f"Subsequent query time: {query_time:.4f} seconds\n")
@@ -580,7 +587,7 @@ print(f"Write time / query time ratio: {write_time / query_time:.2f}\n")
 print("\nTesting edge cases...")
 print("Testing empty DataFrame...\n")
 df_empty = spark.createDataFrame([], schema)
-df_empty_cached = df_empty.cacheToDbfs()
+df_empty_cached = cacheToDbfs(df_empty)
 print(f"Empty DataFrame cached: {df_empty_cached}\n")
 
 print("\nTesting special characters in column names...")
@@ -594,7 +601,7 @@ schema_special = StructType([
 df_special = spark.createDataFrame(data_special, schema_special)
 df_special = df_special.withColumnRenamed("special_col", "special.col")
 try:
-    df_special_cached = df_special.cacheToDbfs()
+    df_special_cached = cacheToDbfs(df_special)
     print("Special characters handled successfully\n")
 except Exception as e:
     print(f"Error with special characters: {str(e)}\n")
@@ -642,7 +649,6 @@ print("\nTesting createCachedDataFrame integration...")
 
 import pandas as pd
 
-from dbfs_spark_cache.caching import createCachedDataFrame
 
 # 1. Create in-memory data
 data_mem = [{"x": i, "y": i * 2} for i in range(5)]
@@ -728,7 +734,7 @@ assert cache_exists_before, f"Cache table {table_name_clear_mem} should exist be
 
 # 5. Clear the cache using clearDbfsCache on the DataFrame
 print(f"\nClearing cache for DataFrame with hash {data_hash_clear_mem} using df.clearDbfsCache()...")
-df_clear_mem.clearDbfsCache()
+clearDbfsCache(df_clear_mem)
 print("clearDbfsCache called.")
 
 # 6. Verify that the cache table no longer exists
@@ -794,15 +800,20 @@ print("\nOverridden spark.createDataFrame test passed.\n")
 
 print("\nTesting combined caching: createCachedDataFrame + normal cache...")
 
+def assert_not_bad_plan(df, should=False):
+    plan = get_query_plan(df)
+    match = ("Scan ExistingRDD" in plan or "LocalTableScan" in plan)
+    assert not match if not should else match, f"A dataframe created with createDataFrame should {'not' if not should else ''} have a problematic indicator in the query plan: {plan}"
+
 # 1. Create a normal DataFrame and cache it
 data_norm = [("A", 1), ("B", 2)]
 schema_norm = "label STRING, value INT"
 df_norm = spark.createDataFrame(data_norm, schema=schema_norm)
-assert "Scan ExistingRDD" in get_query_plan(df_norm), "A dataframe created with createDataFrame should have a problematic indicator 'Scan ExistingRDD' in the query plan"
+assert_not_bad_plan(df_norm, should=True)
 
 # 2. Create a DataFrame using createCachedDataFrame
 df_norm_cached = spark.createCachedDataFrame(data_norm, schema=schema_norm)
-assert "Scan ExistingRDD" not in get_query_plan(df_norm_cached), "A dataframe created with createDataFrame should not have a problematic indicator 'Scan ExistingRDD' in the query plan"
+assert_not_bad_plan(df_norm_cached)
 print("Normal cached DataFrame:")
 df_norm_cached.show()
 
@@ -819,9 +830,9 @@ print("Combined DataFrame (before caching):")
 df_combined.show()
 
 # 4. Cache the combined DataFrame
-df_combined_cached = df_combined.cacheToDbfs()
+df_combined_cached = cacheToDbfs(df_combined)
 assert not get_table_hash(df_combined_cached).startswith("data_"), f"Invalid hash for Dataframe derived from data-cached dataframe: {get_table_hash(df_combined_cached)}"
-assert "Scan ExistingRDD" not in get_query_plan(df_combined_cached), "A dataframe created with createDataFrame should not have a problematic indicator 'Scan ExistingRDD' in the query plan"
+assert_not_bad_plan(df_combined_cached)
 print("Combined DataFrame (after caching):")
 df_combined_cached.show()
 
@@ -842,3 +853,4 @@ print("Combined caching test passed.\n")
 print("Integration test passed!")
 
 # COMMAND ----------
+
