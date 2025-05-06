@@ -1,6 +1,11 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
-# MAGIC
+# MAGIC ### Integration Test Notebook for dbfs-spark-cache
+# MAGIC This notebook executes the comprehensive integration test plan for the dbfs-spark-cache module
+
 # MAGIC This notebook outlines the plan for creating an integration test notebook for the dbfs-spark-cache module. The integration tests will focus on testing functionality not covered by the unit tests, with an emphasis on testing the inner functions in `dbfs_spark_cache/caching.py` first, then testing different variants of `cacheToDbfs()` and `withCachedDisplay()`.
 # MAGIC
 # MAGIC 1. This notebook should be run in a Databricks environment with the dbfs-spark-cache module installed, or with library code source imported directly.
@@ -89,11 +94,6 @@ set_and_get_workdir = import_from_file('../notebook_utils.py', 'set_and_get_work
 setup_dependencies = import_from_file('../notebook_utils.py', 'setup_dependencies')
 REPO_PATH = set_and_get_workdir(spark)
 setup_dependencies(REPO_PATH, spark)
-
-# MAGIC %md
-# MAGIC ### Integration Test Notebook for dbfs-spark-cache
-# MAGIC #
-# MAGIC #### This notebook executes the comprehensive integration test plan for the dbfs-spark-cache module
 
 # COMMAND ----------
 
