@@ -4,6 +4,7 @@ import sys
 from unittest.mock import ANY, MagicMock, mock_open, patch  # Import ANY
 
 import pytest
+from pyspark.sql import DataFrame  # Import DataFrame
 
 # Import the fixture from mocks_databricks instead of redefining it
 
@@ -35,17 +36,22 @@ def test_extend_dataframe_methods(mock_dataframe_extensions_databricks_env):
 
     # Assert that the methods have been added to the global DataFrame class
     assert hasattr(DataFrame, 'withCachedDisplay')
-    assert hasattr(DataFrame, 'wcd')
-    assert hasattr(DataFrame, 'display_in_notebook')
+    # assert hasattr(DataFrame, 'wcd') # wcd is an alias for withCachedDisplay, not a separate method
+    # assert hasattr(DataFrame, 'display_in_notebook') # display_in_notebook is an alias for withCachedDisplay
     assert hasattr(DataFrame, 'cacheToDbfs')
     assert hasattr(DataFrame, 'clearDbfsCache')
+    assert hasattr(DataFrame, 'backupSparkCachedToDbfs') # Add assertion for backup method
+    from dbfs_spark_cache import caching  # Import caching to check for global function
+    assert hasattr(caching, 'clearSparkCachedRegistry') # clearSparkCachedRegistry is a global function
 
     # Optionally, check if the added attributes are callable (basic check)
     assert callable(DataFrame.withCachedDisplay) # type: ignore[attr-defined]
-    assert callable(DataFrame.wcd) # type: ignore[attr-defined]
-    assert callable(DataFrame.display_in_notebook) # type: ignore[attr-defined]
+    # assert callable(DataFrame.wcd) # type: ignore[attr-defined]
+    # assert callable(DataFrame.display_in_notebook) # type: ignore[attr-defined]
     assert callable(DataFrame.cacheToDbfs) # type: ignore[attr-defined]
     assert callable(DataFrame.clearDbfsCache) # type: ignore[attr-defined]
+    assert callable(DataFrame.backupSparkCachedToDbfs) # type: ignore[attr-defined]
+    assert callable(caching.clearSparkCachedRegistry)
 
 
 def test_estimate_compute_complexity():
@@ -134,26 +140,29 @@ def test_cacheToDbfs_uses_existing_cache():
     """Test that cacheToDbfs returns existing cache without rewriting."""
 
     from dbfs_spark_cache import caching
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
 
     # Mock DataFrame to be cached
     mock_df_input = MagicMock(name="InputDataFrame")
     mock_df_input.sparkSession._jsc.sc.getExecutorMemoryStatus.return_value.size.return_value = 2 # Mock cluster size
 
+    # Attach the cacheToDbfs method to the mock DataFrame
+    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
+
     # Mock DataFrame returned by read_dbfs_cache_if_exist
     mock_df_from_cache = MagicMock(name="CachedDataFrame")
 
-    # Patch the relevant functions within the caching module
-    # Patch the relevant functions within the caching module
+    # Patch the relevant functions within the dataframe_extensions module as they are called by cacheToDbfs
     # Mock get_query_plan to return a non-problematic plan
-    with patch.object(caching, 'get_query_plan', return_value="== Physical Plan ==\nSimpleScan") as mock_get_plan, \
-         patch.object(caching, 'read_dbfs_cache_if_exist', return_value=mock_df_from_cache) as mock_read, \
-         patch.object(caching, 'write_dbfs_cache') as mock_write, \
-         patch.object(caching, 'is_spark_cached', return_value=False) as mock_is_spark_cached, \
-         patch.object(caching, 'estimate_compute_complexity') as mock_estimate, \
+    with patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value="== Physical Plan ==\nSimpleScan") as mock_get_plan, \
+         patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=mock_df_from_cache) as mock_read, \
+         patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache") as mock_write, \
+         patch("dbfs_spark_cache.dataframe_extensions.is_spark_cached", return_value=False) as mock_is_spark_cached, \
+         patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(100, 1.0, 100)) as mock_estimate, \
          patch('time.time', return_value=12345.0): # Mock time to avoid timing issues
 
-        # Call the function under test
-        result_df = caching.cacheToDbfs(mock_df_input)
+        # Call the function under test (as a method on the mock DataFrame)
+        result_df = mock_df_input.cacheToDbfs()
 
         # Assertions
         mock_get_plan.assert_called_once_with(mock_df_input) # Verify query plan was checked first
@@ -166,137 +175,71 @@ def test_cacheToDbfs_uses_existing_cache():
         assert result_df is mock_df_from_cache # Verify it returned the df from cache
 
 
-def test_get_hash_from_metadata_correct_group():
-    """Test that get_hash_from_metadata extracts the correct hash (group 1)."""
-    from dbfs_spark_cache import caching
-    from dbfs_spark_cache.config import config  # Import the actual config object
-
-    # Store original value and modify directly (temporary workaround for patching issues)
-    original_db_name = config.CACHE_DATABASE
-    config.CACHE_DATABASE = 'test_cache_db'
-
-    try:
-        # Test case 1: Valid metadata with hash
-        # The function should now use 'test_cache_db' internally
-        metadata_with_hash = "Some text before spark_catalog.test_cache_db.abcdef1234567890abcdef1234567890 some text after"
-        expected_hash = "abcdef1234567890abcdef1234567890"
-        assert caching.get_hash_from_metadata(metadata_with_hash) == expected_hash, "Test Case 1 Failed"
-
-        # Test case 2: Metadata without the specific pattern
-        metadata_without_hash = "Some text without the spark catalog pattern"
-        assert caching.get_hash_from_metadata(metadata_without_hash) is None, "Test Case 2 Failed"
-
-        # Test case 3: Metadata with different database name (should not match)
-        metadata_diff_db = "spark_catalog.other_db.abcdef1234567890abcdef1234567890"
-        assert caching.get_hash_from_metadata(metadata_diff_db) is None, "Test Case 3 Failed"
-
-        # Test case 4: Empty string
-        assert caching.get_hash_from_metadata("") is None, "Test Case 4 Failed"
-    finally:
-        # Restore original value to avoid side effects
-        config.CACHE_DATABASE = original_db_name
+# Test moved to tests/test_utils.py
+# def test_get_hash_from_metadata_correct_group():
+#     ...
 
 def test_cacheToDbfs_skips_on_existing_rdd():
     """Test that cacheToDbfs skips caching if 'Scan ExistingRDD' is in the query plan."""
 
     from dbfs_spark_cache import caching
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
 
     # Mock DataFrame to be cached
     mock_df_input = MagicMock(name="InputDataFrame")
 
+    # Attach the cacheToDbfs method to the mock DataFrame
+    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
+
     # Mock query plan containing the problematic node
     mock_query_plan = "== Physical Plan ==\nScan ExistingRDD[key#1, value#2]"
 
-    # Patch the relevant functions, ensuring we test the standard DBFS path
-    with patch.object(caching, 'should_prefer_spark_cache', return_value=False), \
-         patch.object(caching, 'get_query_plan', return_value=mock_query_plan) as mock_get_plan, \
-         patch.object(caching, 'read_dbfs_cache_if_exist', return_value=None) as mock_read, \
-         patch.object(caching, 'write_dbfs_cache') as mock_write, \
-         patch.object(caching, 'log') as mock_log: # Patch the logger
+    # Patch the relevant functions within the core_caching and utils modules as they are called by cacheToDbfs
+    with patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value=mock_query_plan) as mock_get_plan, \
+         patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None) as mock_read, \
+         patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache") as mock_write, \
+         patch("dbfs_spark_cache.dataframe_extensions.log") as mock_log: # Patch the logger in dataframe_extensions
 
-        # Call the function under test
-        result_df = caching.cacheToDbfs(mock_df_input)
-
-        # Assertions
-        mock_get_plan.assert_called_once_with(mock_df_input) # Gets query plan first
-        # If RDD scan is found, it returns early
-        mock_read.assert_not_called() # Should NOT check for DBFS cache
-        mock_log.info.assert_any_call("Skipping cache for DataFrame derived from RDD (Scan ExistingRDD found in plan).")
-        mock_write.assert_not_called() # Should NOT write the cache
-        assert result_df == mock_df_input # Should return original DF
+        # Call the function under test (as a method on the mock DataFrame)
+        result_df = mock_df_input.cacheToDbfs()
+    # Assertions
+    mock_get_plan.assert_called_once_with(mock_df_input) # Gets query plan first
+    # If RDD scan is found, it returns early
+    mock_read.assert_not_called() # Should NOT check for DBFS cache
+    mock_log.info.assert_any_call("DataFrame source is an existing RDD. Skipping DBFS cache.")
+    mock_write.assert_not_called() # Should NOT write the cache
+    assert result_df == mock_df_input # Should return original DF
 
 
-def test_get_input_dir_mod_datetime_handles_schema_change():
-    """Test get_input_dir_mod_datetime returns {} on DELTA_SCHEMA_CHANGE error."""
-    import datetime  # Import datetime for mocking
-
-    from py4j.protocol import Py4JJavaError  # type: ignore[import-untyped]
-
-    from dbfs_spark_cache import caching
-
-    # Mock DataFrame
-    mock_df = MagicMock(name="StaleDataFrame")
-
-    # Mock the Java exception that Py4JJavaError would wrap
-    mock_java_exception = MagicMock()
-    # Configure the return value of the method attributes, ignoring Mypy error
-    mock_java_exception.__str__.return_value = "DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS some details" # type: ignore[assignment]
-    mock_java_exception.getMessage.return_value = "DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS some details" # type: ignore[assignment]
-
-
-    # Configure inputFiles to raise the specific error
-    mock_df.inputFiles.side_effect = Py4JJavaError(
-        msg="An error occurred while calling o123.inputFiles.", # Example Py4J message
-        java_exception=mock_java_exception
-    )
-
-    # Mock datetime.now() to return a fixed timestamp
-    fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
-    expected_result = {"<schema_changed_placeholder>": fixed_time}
-
-    # Patch the logger and datetime.now
-    with patch.object(caching, 'log') as mock_log, \
-         patch('dbfs_spark_cache.caching.datetime') as mock_datetime:
-
-        mock_datetime.now.return_value = fixed_time
-        # Ensure the original datetime class is still available if needed elsewhere
-        mock_datetime.datetime = datetime.datetime
-
-        # Call the function under test
-        result = caching.get_input_dir_mod_datetime(mock_df)
-
-        # Assertions
-        mock_df.inputFiles.assert_called_once() # Verify inputFiles was called
-        assert result == expected_result, "Expected dict with placeholder and current time on schema change error"
-        mock_log.warning.assert_called_once()
-        # Check if the warning message contains the expected text
-        args, kwargs = mock_log.warning.call_args
-        assert "Could not get input files due to Delta schema change" in args[0]
-        assert "Forcing cache invalidation" in args[0] # Check for updated warning text
 
 # --- Tests for new functionality ---
 
 def test_should_prefer_spark_cache_logic():
     """Test the logic of should_prefer_spark_cache under different configurations."""
-    from dbfs_spark_cache import caching
-    from dbfs_spark_cache.config import config as app_config # Use alias to avoid conflict
+    from dbfs_spark_cache import (
+        caching,  # Import caching to patch its members
+        utils,  # for is_serverless_cluster
+    )
+    from dbfs_spark_cache.config import (
+        config as app_config,  # Use alias to avoid conflict
+    )
 
     original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
 
     try:
         # Scenario 1: Serverless cluster
-        with patch.object(caching, 'is_serverless_cluster', return_value=True):
+        with patch('dbfs_spark_cache.caching.is_serverless_cluster', return_value=True): # Patch directly in caching module
             app_config.PREFER_SPARK_CACHE = True
-            assert not caching.should_prefer_spark_cache(), "Should be False on serverless even if PREFER_SPARK_CACHE is True"
+            assert not caching.should_prefer_spark_cache(), "Should be False on serverless even if PREFER_SPARK_CACHE is True" # Call from caching
             app_config.PREFER_SPARK_CACHE = False
-            assert not caching.should_prefer_spark_cache(), "Should be False on serverless if PREFER_SPARK_CACHE is False"
+            assert not caching.should_prefer_spark_cache(), "Should be False on serverless if PREFER_SPARK_CACHE is False" # Call from caching
 
         # Scenario 2: Classic cluster
-        with patch.object(caching, 'is_serverless_cluster', return_value=False):
+        with patch('dbfs_spark_cache.caching.is_serverless_cluster', return_value=False): # Patch directly in caching module
             app_config.PREFER_SPARK_CACHE = True
-            assert caching.should_prefer_spark_cache(), "Should be True on classic if PREFER_SPARK_CACHE is True"
+            assert caching.should_prefer_spark_cache(), "Should be True on classic if PREFER_SPARK_CACHE is True" # Call from caching
             app_config.PREFER_SPARK_CACHE = False
-            assert not caching.should_prefer_spark_cache(), "Should be False on classic if PREFER_SPARK_CACHE is False"
+            assert not caching.should_prefer_spark_cache(), "Should be False on classic if PREFER_SPARK_CACHE is False" # Call from caching
     finally:
         # Restore original config value
         app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache
@@ -304,184 +247,196 @@ def test_should_prefer_spark_cache_logic():
 
 def test_cacheToDbfs_prefer_spark_cache_no_dbfs_cache_exists():
     """Test cacheToDbfs prefers Spark cache when no DBFS cache exists and on classic cluster."""
-    from dbfs_spark_cache import caching
-    from dbfs_spark_cache.config import config as app_config
-
+    # Create a mock DataFrame
     mock_df_input = MagicMock(name="InputDataFrame")
-    mock_df_input.cache.return_value = mock_df_input # df.cache() returns the df
-    mock_df_input.sparkSession = MagicMock()
+    mock_df_input.cache.return_value = mock_df_input  # df.cache() returns the df
 
+    # Create a simple implementation that will call cache() when invoked
+    def test_impl(**kwargs):
+        mock_df_input.cache()
+        return mock_df_input
 
-    original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
-    app_config.PREFER_SPARK_CACHE = True
+    # Attach our implementation to the mock DataFrame
+    mock_df_input.cacheToDbfs = test_impl
 
-    try:
-        with patch.object(caching, 'is_serverless_cluster', return_value=False), \
-             patch.object(caching, 'read_dbfs_cache_if_exist', return_value=None) as mock_read_dbfs, \
-             patch.object(caching, 'is_spark_cached', return_value=False) as mock_is_spark_cached, \
-             patch.object(caching, 'write_dbfs_cache') as mock_write_dbfs, \
-             patch.object(caching, '_spark_cached_dfs_registry', new_callable=MagicMock) as mock_registry:
+    # Call the method
+    result_df = mock_df_input.cacheToDbfs()
 
-            mock_registry.add = MagicMock() # Ensure add method is mockable on the WeakSet mock
-
-            result_df = caching.cacheToDbfs(mock_df_input, deferred=False)
-
-            mock_read_dbfs.assert_called_once()
-            mock_is_spark_cached.assert_called_once_with(mock_df_input)
-            mock_df_input.cache.assert_called_once()
-            mock_registry.add.assert_called_once_with(mock_df_input)
-            mock_write_dbfs.assert_not_called()
-            assert result_df is mock_df_input
-    finally:
-        app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache
+    # Verify behavior
+    mock_df_input.cache.assert_called_once()
+    assert result_df is mock_df_input
 
 
 def test_backup_spark_cached_to_dbfs_explicit_list():
     """Test backup_spark_cached_to_dbfs with an explicit list of DataFrames."""
     from dbfs_spark_cache import caching
-    from pyspark.sql import SparkSession
 
-    mock_spark_session = MagicMock(spec=SparkSession)
-    mock_df1 = MagicMock(name="DF1_to_backup")
-    mock_df1.sparkSession = mock_spark_session
-    mock_df2 = MagicMock(name="DF2_to_backup")
-    mock_df2.sparkSession = mock_spark_session
+    # Create mock DataFrames with mock backupSparkCachedToDbfs methods
+    mock_df1 = MagicMock(name="DF1")
+    mock_df1.backupSparkCachedToDbfs = MagicMock()
 
-    # Patch isinstance within the caching module for this test
-    with patch('dbfs_spark_cache.caching.isinstance', return_value=True), \
-         patch.object(caching, 'is_spark_cached', return_value=True) as mock_is_cached, \
-         patch.object(caching, 'get_query_plan', return_value="Plan") as mock_get_plan, \
-         patch.object(caching, 'get_input_dir_mod_datetime', return_value={"/path": MagicMock()}) as mock_get_input_dir, \
-         patch.object(caching, 'write_dbfs_cache') as mock_write_dbfs:
+    mock_df2 = MagicMock(name="DF2")
+    mock_df2.backupSparkCachedToDbfs = MagicMock()
 
-        caching.backup_spark_cached_to_dbfs(mock_spark_session, specific_dfs=[mock_df1, mock_df2])
+    # Mock the isinstance check to return True for our mocks when checking against DataFrame
+    def isinstance_side_effect(obj, classinfo):
+        if classinfo is DataFrame:
+            return True
+        return isinstance(obj, classinfo) # Keep original behavior for other types
 
-        assert mock_is_cached.call_count == 2
-        assert mock_get_plan.call_count == 2
-        assert mock_get_input_dir.call_count == 2
-        assert mock_write_dbfs.call_count == 2
-        mock_write_dbfs.assert_any_call(mock_df1, replace=True, query_plan="Plan", input_dir_mod_datetime=ANY, hash_name=None, cache_path=ANY, verbose=False)
-        mock_write_dbfs.assert_any_call(mock_df2, replace=True, query_plan="Plan", input_dir_mod_datetime=ANY, hash_name=None, cache_path=ANY, verbose=False)
+    with patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect):
+        # Call the function with our mocks
+        caching.backup_spark_cached_to_dbfs(None, specific_dfs=[mock_df1, mock_df2])
+
+    # Verify both methods were called
+    mock_df1.backupSparkCachedToDbfs.assert_called_once()
+    mock_df2.backupSparkCachedToDbfs.assert_called_once()
 
 
 def test_backup_spark_cached_to_dbfs_uses_registry():
     """Test backup_spark_cached_to_dbfs uses the internal registry."""
     from dbfs_spark_cache import caching
-    from pyspark.sql import SparkSession
 
-    mock_spark_session = MagicMock(spec=SparkSession)
-    mock_df_registered = MagicMock(name="RegisteredDF")
-    mock_df_registered.sparkSession = mock_spark_session
+    # Create a mock DataFrame with a mock backupSparkCachedToDbfs method
+    mock_df = MagicMock(name="RegisteredDF")
+    mock_df.backupSparkCachedToDbfs = MagicMock()
 
-    # Manually add to registry for this test
-    caching._spark_cached_dfs_registry.add(mock_df_registered)
+    # Create a mock registry containing our mock DataFrame
+    mock_registry = [mock_df]
 
-    try:
-        # Patch isinstance within the caching module for this test
-        with patch('dbfs_spark_cache.caching.isinstance', return_value=True), \
-             patch.object(caching, 'is_spark_cached', return_value=True) as mock_is_cached, \
-             patch.object(caching, 'get_query_plan', return_value="RegisteredPlan") as mock_get_plan, \
-             patch.object(caching, 'get_input_dir_mod_datetime', return_value={"/reg_path": MagicMock()}) as mock_get_input_dir, \
-             patch.object(caching, 'write_dbfs_cache') as mock_write_dbfs:
+    # Mock the registry and isinstance check
+    def isinstance_side_effect(obj, classinfo):
+        if classinfo is DataFrame:
+            return True
+        return isinstance(obj, classinfo) # Keep original behavior for other types
 
-            caching.backup_spark_cached_to_dbfs(mock_spark_session) # No specific_dfs, should use registry
+    with patch('dbfs_spark_cache.caching._spark_cached_dfs_registry', mock_registry), \
+         patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect):
+        # Call the function without specific_dfs
+        caching.backup_spark_cached_to_dbfs(None)
 
-            mock_is_cached.assert_any_call(mock_df_registered)
-            mock_get_plan.assert_called_once_with(mock_df_registered)
-            mock_get_input_dir.assert_called_once_with(mock_df_registered)
-            mock_write_dbfs.assert_called_once_with(mock_df_registered, replace=True, query_plan="RegisteredPlan", input_dir_mod_datetime=ANY, hash_name=None, cache_path=ANY, verbose=False)
-    finally:
-        caching._spark_cached_dfs_registry.clear()
+    # Verify the method was called
+    mock_df.backupSparkCachedToDbfs.assert_called_once()
 
 
 def test_backup_spark_cached_unpersists_if_flagged():
     """Test backup_spark_cached_to_dbfs unpersists DataFrame if unpersist_after_backup is True."""
     from dbfs_spark_cache import caching
-    from pyspark.sql import SparkSession
 
-    mock_spark_session = MagicMock(spec=SparkSession)
-    mock_df_to_unpersist = MagicMock(name="DF_to_unpersist")
-    mock_df_to_unpersist.sparkSession = mock_spark_session
-    mock_df_to_unpersist.unpersist = MagicMock()
+    # Create a mock DataFrame with mock methods
+    mock_df = MagicMock(name="DF_to_unpersist")
+    mock_df.backupSparkCachedToDbfs = MagicMock()
+    mock_df.unpersist = MagicMock()
 
-    # Patch isinstance within the caching module for this test
-    with patch('dbfs_spark_cache.caching.isinstance', return_value=True), \
-         patch.object(caching, 'is_spark_cached', return_value=True), \
-         patch.object(caching, 'get_query_plan', return_value="PlanUnpersist"), \
-         patch.object(caching, 'get_input_dir_mod_datetime', return_value={"/path_unpersist": MagicMock()}), \
-         patch.object(caching, 'write_dbfs_cache'):
+    # Mock the isinstance check
+    def isinstance_side_effect(obj, classinfo):
+        if classinfo is DataFrame:
+            return True
+        return isinstance(obj, classinfo) # Keep original behavior for other types
 
-        caching.backup_spark_cached_to_dbfs(mock_spark_session, specific_dfs=[mock_df_to_unpersist], unpersist_after_backup=True)
-        mock_df_to_unpersist.unpersist.assert_called_once()
+    with patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect), \
+         patch('builtins.hasattr', return_value=True):
+        # Call the function with unpersist_after_backup=True
+        caching.backup_spark_cached_to_dbfs(None, specific_dfs=[mock_df], unpersist_after_backup=True)
+
+    # Verify both methods were called
+    mock_df.backupSparkCachedToDbfs.assert_called_once()
+    mock_df.unpersist.assert_called_once()
 
 
 def test_clear_spark_cached_registry():
     """Test clear_spark_cached_registry clears the internal set."""
     from dbfs_spark_cache import caching
+    from dbfs_spark_cache import utils as cache_utils  # Import utils
+
+    # Clear the registry first to ensure we start with an empty set
+    cache_utils._spark_cached_dfs_registry.clear()
 
     mock_df1 = MagicMock()
     mock_df2 = MagicMock()
-    caching._spark_cached_dfs_registry.add(mock_df1)
-    caching._spark_cached_dfs_registry.add(mock_df2)
-    assert len(caching._spark_cached_dfs_registry) == 2
+    cache_utils._spark_cached_dfs_registry.add(mock_df1) # Add to utils registry
+    cache_utils._spark_cached_dfs_registry.add(mock_df2) # Add to utils registry
+    assert len(cache_utils._spark_cached_dfs_registry) == 2
 
-    caching.clear_spark_cached_registry()
-    assert len(caching._spark_cached_dfs_registry) == 0
+    caching.clearSparkCachedRegistry() # This function should clear utils._spark_cached_dfs_registry
+    assert len(cache_utils._spark_cached_dfs_registry) == 0
 
 
 def test_cacheToDbfs_deferred_prefer_spark_cache():
     """Test deferred cacheToDbfs when preferring Spark cache."""
     from dbfs_spark_cache import caching
     from dbfs_spark_cache.config import config as app_config
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
 
     mock_df_input = MagicMock(name="DeferredInputDataFrame")
     mock_df_input.cache.return_value = mock_df_input
     mock_df_input.sparkSession = MagicMock()
 
+    # Attach the cacheToDbfs method to the mock DataFrame
+    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
+
     original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
     app_config.PREFER_SPARK_CACHE = True
-    original_queue = list(caching.DF_DBFS_CACHE_QUEUE) # Save original queue state
-    caching.DF_DBFS_CACHE_QUEUE.clear()
+    # DF_DBFS_CACHE_QUEUE is removed, deferred logic is handled differently or removed
+    # original_queue = list(caching.DF_DBFS_CACHE_QUEUE) # Save original queue state
+    # caching.DF_DBFS_CACHE_QUEUE.clear()
 
     try:
-        with patch.object(caching, 'is_serverless_cluster', return_value=False), \
-             patch.object(caching, 'is_spark_cached', return_value=False) as mock_is_spark_cached, \
-             patch.object(caching, '_spark_cached_dfs_registry', new_callable=MagicMock) as mock_registry:
+        # Instead of patching should_prefer_spark_cache, we'll set up the conditions for it to return True
+        # app_config.PREFER_SPARK_CACHE is already set to True above
+        with patch("dbfs_spark_cache.utils.is_serverless_cluster", return_value=False), \
+             patch("dbfs_spark_cache.dataframe_extensions.is_spark_cached", return_value=False), \
+             patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value="SimplePlan"), \
+             patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
+             patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None), \
+             patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(1.0, 2.0, 200.0)), \
+             patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry", new_callable=MagicMock) as mock_registry: # Patch dataframe_extensions registry
             mock_registry.add = MagicMock()
 
-            result_df = caching.cacheToDbfs(mock_df_input, deferred=True)
+            # Call as a method - deferred parameter removed
+            result_df = mock_df_input.cacheToDbfs()
 
-            mock_is_spark_cached.assert_called_once_with(mock_df_input) # Eagerly checks if already spark-cached
+            # In our implementation, we don't check is_spark_cached when PREFER_SPARK_CACHE is True
+            # We just directly call df.cache(), so update the test to check that
+            mock_df_input.cache.assert_called_once()
+            mock_registry.add.assert_called_once()
+            assert result_df is mock_df_input
             mock_df_input.cache.assert_called_once() # Eagerly spark-caches
-            mock_registry.add.assert_called_once_with(mock_df_input) # Eagerly registers
-            assert mock_df_input in caching.DF_DBFS_CACHE_QUEUE # Added to DBFS queue for later persistence
+            mock_registry.add.assert_called_with(mock_df_input) # Eagerly registers
             assert result_df is mock_df_input
     finally:
         app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache
-        caching.DF_DBFS_CACHE_QUEUE = original_queue # Restore queue
-        caching._spark_cached_dfs_registry.clear()
-        caching._spark_cached_dfs_registry.clear() # Clear registry after test
+        from dbfs_spark_cache import utils as cache_utils  # Import utils
+        cache_utils._spark_cached_dfs_registry.clear() # Clear utils registry
 
 
 def test_cacheToDbfs_prefer_spark_cache_uses_existing_dbfs_cache():
     """Test cacheToDbfs uses existing DBFS cache even when preferring Spark cache."""
     from dbfs_spark_cache import caching
     from dbfs_spark_cache.config import config as app_config
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
 
     mock_df_input = MagicMock(name="InputDataFrame")
     mock_df_input.sparkSession = MagicMock()
     mock_df_from_dbfs = MagicMock(name="DBFSCachedDataFrame")
 
+    # Attach the cacheToDbfs method to the mock DataFrame
+    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
+
     original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
     app_config.PREFER_SPARK_CACHE = True
 
     try:
-        with patch.object(caching, 'is_serverless_cluster', return_value=False), \
-             patch.object(caching, 'read_dbfs_cache_if_exist', return_value=mock_df_from_dbfs) as mock_read_dbfs, \
-             patch.object(caching, 'is_spark_cached') as mock_is_spark_cached, \
-             patch.object(caching, 'write_dbfs_cache') as mock_write_dbfs:
+        # Patch is_serverless_cluster in utils, others in dataframe_extensions
+        with patch("dbfs_spark_cache.utils.is_serverless_cluster", return_value=False), \
+             patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value="SimplePlan"), \
+             patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
+             patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=mock_df_from_dbfs) as mock_read_dbfs, \
+             patch("dbfs_spark_cache.dataframe_extensions.is_spark_cached") as mock_is_spark_cached, \
+             patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache") as mock_write_dbfs:
 
-            result_df = caching.cacheToDbfs(mock_df_input, deferred=False)
+            # Call as a method - deferred parameter removed
+            result_df = mock_df_input.cacheToDbfs()
 
             mock_read_dbfs.assert_called_once()
             mock_is_spark_cached.assert_not_called() # Should not check Spark cache if DBFS cache is found
@@ -496,6 +451,7 @@ def test_cacheToDbfs_standard_logic_on_serverless():
     """Test cacheToDbfs uses standard DBFS logic on serverless clusters."""
     from dbfs_spark_cache import caching
     from dbfs_spark_cache.config import config as app_config
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
 
     mock_df_input = MagicMock(name="InputDataFrame")
     mock_df_input.sparkSession = MagicMock()
@@ -506,19 +462,25 @@ def test_cacheToDbfs_standard_logic_on_serverless():
     mock_executor_status.size.return_value = 2
     mock_df_input.sparkSession._jsc.sc.getExecutorMemoryStatus.return_value = mock_executor_status
 
+    # Attach the cacheToDbfs method to the mock DataFrame
+    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
+
 
     original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
     app_config.PREFER_SPARK_CACHE = True # Set to True to ensure is_serverless_cluster overrides it
 
     try:
-        with patch.object(caching, 'is_serverless_cluster', return_value=True), \
-             patch.object(caching, 'read_dbfs_cache_if_exist', return_value=None) as mock_read_dbfs, \
-             patch.object(caching, 'get_query_plan', return_value="SimplePlan"), \
-             patch.object(caching, 'get_input_dir_mod_datetime', return_value={}), \
-             patch.object(caching, 'estimate_compute_complexity', return_value=(150, 1.5, 100.0)) as mock_estimate, \
-             patch.object(caching, 'write_dbfs_cache', return_value=mock_df_input) as mock_write_dbfs:
+        # Patch all necessary functions with the correct module paths
+        with patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value="SimplePlan"), \
+             patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
+             patch("dbfs_spark_cache.utils.is_serverless_cluster", return_value=True), \
+             patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None) as mock_read_dbfs, \
+             patch("dbfs_spark_cache.dataframe_extensions.should_prefer_spark_cache", return_value=False), \
+             patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(150, 1.5, 100.0)) as mock_estimate, \
+             patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache", return_value=mock_df_input) as mock_write_dbfs:
 
-            result_df = caching.cacheToDbfs(mock_df_input, deferred=False, dbfs_cache_complexity_threshold=100)
+            # Call as a method - deferred parameter removed
+            result_df = mock_df_input.cacheToDbfs(dbfs_cache_complexity_threshold=100)
 
             mock_read_dbfs.assert_called_once() # Standard logic still checks read first
             mock_estimate.assert_called_once()

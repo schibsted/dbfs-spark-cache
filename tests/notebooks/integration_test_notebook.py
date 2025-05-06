@@ -107,26 +107,39 @@ from pyspark.sql.functions import col, lit, rand
 from pyspark.sql.functions import sum as spark_sum
 
 from dbfs_spark_cache import extend_dataframe_methods
-
-# Import the dbfs-spark-cache module and its inner functions
-from dbfs_spark_cache.caching import (
-    cacheToDbfs,
-    clearDbfsCache,
-    createCachedDataFrame,
+from dbfs_spark_cache.cache_management import (
     clear_cache_for_hash,
     clear_caches_older_than,
     clear_inconsistent_cache,
-    get_cache_metadata,
     get_cached_dataframe_metadata,
     get_cached_tables,
+)
+from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
+from dbfs_spark_cache.config import config
+from dbfs_spark_cache.core_caching import (
+    cache_dataframes_in_queue_to_dbfs,
+    createCachedDataFrame,
+    get_cache_metadata,
     get_input_dir_mod_datetime,
     get_query_plan,
     get_table_hash,
-    get_table_name_from_hash,
+    is_spark_cached,
     read_dbfs_cache_if_exist,
     write_dbfs_cache,
 )
-from dbfs_spark_cache.config import config
+
+# Separate import for clearSparkCachedRegistry
+# Import the dbfs-spark-cache module and its inner functions
+from dbfs_spark_cache.dataframe_extensions import (
+    __withCachedDisplay__,
+    _spark_cached_dfs_registry,
+    cacheToDbfs,
+    clearDbfsCache,
+    clearSparkCachedRegistry,
+    should_prefer_spark_cache,
+)
+from dbfs_spark_cache.hashing import _hash_input_data
+from dbfs_spark_cache.utils import get_table_name_from_hash
 
 extend_dataframe_methods(spark, dbfs_cache_complexity_threshold=130) # Pass spark
 
@@ -181,9 +194,9 @@ help(extend_dataframe_methods)
 print("---")
 help(DataFrame.wcd) # type: ignore # noqa: F821
 print("---")
-from dbfs_spark_cache.caching import __withCachedDisplay__
+# from dbfs_spark_cache.caching import __withCachedDisplay__ # Removed redundant import
 
-help(__withCachedDisplay__)
+help(DataFrame.withCachedDisplay) # type: ignore # noqa: F821
 
 # COMMAND ----------
 
@@ -349,9 +362,9 @@ print(f"Cache table {qualified_table_name_high} does not exist as expected: {not
 print("\nTesting deferred caching...")
 df_deferred = cacheToDbfs(df_simple, deferred=True)
 print(f"Deferred caching: {df_deferred}\n")
-from dbfs_spark_cache.caching import cache_dataframes_in_queue_to_dbfs
+# from dbfs_spark_cache.caching import cache_dataframes_in_queue_to_dbfs # Removed redundant import
 
-cache_dataframes_in_queue_to_dbfs()
+dbfs_spark_cache.caching.cache_dataframes_in_queue_to_dbfs()
 print("Executed deferred caching\n")
 
 print("\nTesting cache invalidation with data changes...")
@@ -496,9 +509,9 @@ print("\nMultiple caching test completed successfully.\n")
 
 # COMMAND ----------
 
-from dbfs_spark_cache.caching import __withCachedDisplay__
-withCachedDisplay = __withCachedDisplay__
-wcd = __withCachedDisplay__
+# from dbfs_spark_cache.caching import __withCachedDisplay__ # Removed redundant import
+withCachedDisplay = dbfs_spark_cache.caching.__withCachedDisplay__
+wcd = dbfs_spark_cache.caching.__withCachedDisplay__
 
 # COMMAND ----------
 
@@ -516,10 +529,6 @@ df_skip_display = wcd(df_simple, skip_display=True)
 print(f"wcd with skip_display: {df_skip_display}\n")
 df_skip_cache = wcd(df_simple, skip_dbfs_cache=True)
 print(f"wcd with skip_dbfs_cache: {df_skip_cache}\n")
-print("\nTesting chaining...")
-df_chained = wcd(df_simple).groupBy("name").agg(spark_sum("salary").alias("total_salary"))
-df_chained = wcd(df_chained)
-print(f"Chained wcd: {df_chained}\n")
 
 # COMMAND ----------
 
@@ -528,9 +537,9 @@ print(f"Chained wcd: {df_chained}\n")
 
 # COMMAND ----------
 
-from dbfs_spark_cache.caching import should_prefer_spark_cache, backup_spark_cached_to_dbfs, clear_spark_cached_registry, is_spark_cached, _spark_cached_dfs_registry
-from dbfs_spark_cache.config import config as app_config
 import os
+
+from dbfs_spark_cache.config import config as app_config
 
 # --- Test PREFER_SPARK_CACHE behavior ---
 print("\\n--- Testing PREFER_SPARK_CACHE behavior (must be done with classic cluster) ---")
@@ -546,7 +555,7 @@ assert should_prefer_spark_cache() is True, "should_prefer_spark_cache should be
 df_classic_prefer_true = df_simple.select("name", "age") # Create a new DF for this test
 hash_classic_prefer_true = get_table_hash(df_classic_prefer_true)
 clear_cache_for_hash(hash_classic_prefer_true) # Ensure no DBFS cache
-clear_spark_cached_registry()
+clearSparkCachedRegistry()
 assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty"
 
 print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=True, no existing DBFS cache...")
@@ -557,6 +566,7 @@ assert df_cached_classic_spark in _spark_cached_dfs_registry, "DataFrame should 
 table_name_classic_spark = get_table_name_from_hash(hash_classic_prefer_true)
 assert not spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} should NOT exist yet"
 print(f"DataFrame was Spark-cached and added to registry. DBFS table {table_name_classic_spark} does not exist yet.")
+assert "InMemoryRelation" in get_query_plan(df_cached_classic_spark), "Query plan should show Spark caching (InMemoryRelation)"
 
 # Now, test backup
 print("\\nTesting backup_spark_cached_to_dbfs...")
@@ -574,7 +584,7 @@ assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should b
 df_classic_prefer_false = df_sql.select("name", "salary")
 hash_classic_prefer_false = get_table_hash(df_classic_prefer_false)
 clear_cache_for_hash(hash_classic_prefer_false)
-clear_spark_cached_registry()
+clearSparkCachedRegistry()
 
 print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=False...")
 df_cached_classic_dbfs = cacheToDbfs(df_classic_prefer_false, dbfs_cache_complexity_threshold=0) # Force DBFS cache
@@ -595,7 +605,7 @@ assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should b
 df_serverless_prefer_true = df_sql.select("age", "salary")
 hash_serverless_prefer_true = get_table_hash(df_serverless_prefer_true)
 clear_cache_for_hash(hash_serverless_prefer_true)
-clear_spark_cached_registry()
+clearSparkCachedRegistry()
 
 print("Calling cacheToDbfs on serverless, PREFER_SPARK_CACHE=True (should use standard DBFS logic)...")
 df_cached_serverless_dbfs = cacheToDbfs(df_serverless_prefer_true, dbfs_cache_complexity_threshold=0) # Force DBFS cache
@@ -616,6 +626,63 @@ elif "DATABRICKS_RUNTIME_VERSION" in os.environ and os.environ.get("DATABRICKS_R
 
 print("\\n--- PREFER_SPARK_CACHE behavior tests completed ---")
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC #### Test chained cacheToDbfs with PREFER_SPARK_CACHE=True
+# MAGIC
+# MAGIC This tests that chaining cacheToDbfs calls correctly utilizes Spark cache when PREFER_SPARK_CACHE is True.
+
+# COMMAND ----------
+
+print("\nTesting chained cacheToDbfs with PREFER_SPARK_CACHE=True...")
+
+# Ensure PREFER_SPARK_CACHE is True for this test
+original_prefer_config_chained = app_config.PREFER_SPARK_CACHE
+app_config.PREFER_SPARK_CACHE = True
+print(f"Setting PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE} for chained test")
+
+# Create a new DataFrame for this test
+df_chained_spark_orig = df_simple.select("name", "salary")
+hash_chained_spark_orig = get_table_hash(df_chained_spark_orig)
+clear_cache_for_hash(hash_chained_spark_orig) # Ensure no DBFS cache
+clearSparkCachedRegistry()
+assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty before chained test"
+
+# First cacheToDbfs call
+print("Calling first cacheToDbfs in chain...")
+df_chained_spark_cached_1 = cacheToDbfs(df_chained_spark_orig)
+
+assert is_spark_cached(df_chained_spark_cached_1), "First DataFrame in chain should be Spark-cached"
+assert df_chained_spark_cached_1 in _spark_cached_dfs_registry, "First DataFrame should be in registry"
+assert "InMemoryRelation" in get_query_plan(df_chained_spark_cached_1), "Query plan for first chained DF should show Spark caching"
+print("First DataFrame in chain was Spark-cached and added to registry.")
+
+# Apply a transformation and call cacheToDbfs again
+print("\nApplying transformation and calling second cacheToDbfs in chain...")
+df_chained_spark_transformed = df_chained_spark_cached_1.filter(col("salary") > 60000)
+df_chained_spark_cached_2 = cacheToDbfs(df_chained_spark_transformed)
+
+assert is_spark_cached(df_chained_spark_cached_2), "Second DataFrame in chain should be Spark-cached"
+assert df_chained_spark_cached_2 in _spark_cached_dfs_registry, "Second DataFrame should be in registry"
+assert "InMemoryRelation" in get_query_plan(df_chained_spark_cached_2), "Query plan for second chained DF should show Spark caching"
+print("Second DataFrame in chain was Spark-cached and added to registry.")
+
+# Verify that the first cached DF is still in the registry (optional, but good for robustness)
+assert df_chained_spark_cached_1 in _spark_cached_dfs_registry, "First DataFrame should remain in registry after second cache call"
+print("Both DataFrames remain in registry.")
+
+# Clean up caches created during this test
+clear_cache_for_hash(get_table_hash(df_chained_spark_cached_1))
+clear_cache_for_hash(get_table_hash(df_chained_spark_cached_2))
+clearSparkCachedRegistry()
+assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty after chained test cleanup"
+
+# Restore original config
+app_config.PREFER_SPARK_CACHE = original_prefer_config_chained
+print(f"Restored PREFER_SPARK_CACHE to {app_config.PREFER_SPARK_CACHE}")
+
+print("\\n--- Chained cacheToDbfs with PREFER_SPARK_CACHE=True test completed ---")
 
 # COMMAND ----------
 
@@ -747,7 +814,6 @@ print("\nTesting createCachedDataFrame integration...")
 
 import pandas as pd
 
-
 # 1. Create in-memory data
 data_mem = [{"x": i, "y": i * 2} for i in range(5)]
 schema_mem = "x INT, y INT"
@@ -772,8 +838,6 @@ rows_2 = set(tuple(row) for row in df_mem_2.collect())
 assert rows_1 == rows_2, "Data mismatch between cache miss and cache hit"
 
 # 5. Check that the cache table exists
-from dbfs_spark_cache.caching import _hash_input_data, get_table_name_from_hash
-
 data_hash = _hash_input_data(data_mem)
 table_name = get_table_name_from_hash(f"data_{data_hash}")
 cache_exists = spark.catalog.tableExists(table_name)
@@ -819,8 +883,6 @@ df_clear_mem = spark.createCachedDataFrame(data_clear_mem, schema=schema_clear_m
 df_clear_mem.show()
 
 # 3. Get the hash and table name for the created cache
-from dbfs_spark_cache.caching import _hash_input_data, get_table_name_from_hash
-
 data_hash_clear_mem = _hash_input_data(data_clear_mem)
 table_name_clear_mem = get_table_name_from_hash(f"data_{data_hash_clear_mem}")
 print(f"Expected cache table name: {table_name_clear_mem}")
@@ -874,7 +936,6 @@ try:
     df_override_test.show()
 
     # Verify that the DataFrame was cached by createCachedDataFrame
-    from dbfs_spark_cache.caching import _hash_input_data, get_table_name_from_hash
     data_hash_override = _hash_input_data(data_override)
     table_name_override = get_table_name_from_hash(f"data_{data_hash_override}")
     cache_exists_override = spark.catalog.tableExists(table_name_override)

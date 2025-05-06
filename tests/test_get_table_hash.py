@@ -6,9 +6,9 @@ from dbfs_spark_cache.caching import get_table_hash, get_cache_metadata
 
 class TestGetTableHash(unittest.TestCase):
 
-    @patch("dbfs_spark_cache.caching.get_input_dir_mod_datetime")
-    @patch("dbfs_spark_cache.caching.get_query_plan")
-    @patch("dbfs_spark_cache.caching.get_hash_from_metadata")
+    @patch("dbfs_spark_cache.core_caching.get_input_dir_mod_datetime")
+    @patch("dbfs_spark_cache.core_caching.get_query_plan")
+    @patch("dbfs_spark_cache.core_caching.get_hash_from_metadata")
     def test_get_table_hash_with_existing_hash(self, mock_get_hash_from_metadata, mock_get_query_plan, mock_get_input_dir_mod_datetime):
         # Arrange
         mock_df = MagicMock()
@@ -29,9 +29,9 @@ class TestGetTableHash(unittest.TestCase):
         metadata_txt = get_cache_metadata(mock_get_input_dir_mod_datetime.return_value, mock_get_query_plan.return_value)
         mock_get_hash_from_metadata.assert_called_once_with(metadata_txt)
 
-    @patch("dbfs_spark_cache.caching.get_input_dir_mod_datetime")
-    @patch("dbfs_spark_cache.caching.get_query_plan")
-    @patch("dbfs_spark_cache.caching.get_hash_from_metadata")
+    @patch("dbfs_spark_cache.core_caching.get_input_dir_mod_datetime")
+    @patch("dbfs_spark_cache.core_caching.get_query_plan")
+    @patch("dbfs_spark_cache.core_caching.get_hash_from_metadata")
     def test_get_table_hash_without_existing_hash(self, mock_get_hash_from_metadata, mock_get_query_plan, mock_get_input_dir_mod_datetime):
         # Arrange
         mock_df = MagicMock()
