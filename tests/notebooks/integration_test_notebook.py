@@ -24,9 +24,9 @@
 import importlib.util
 import os
 import sys
-from datetime import datetime # Import datetime
+from datetime import datetime  # Import datetime
 from pathlib import Path
-from typing import Any, Dict # Import Dict
+from typing import Any, Dict  # Import Dict
 
 
 def import_from_file(
@@ -97,29 +97,39 @@ setup_dependencies(REPO_PATH, spark)
 
 # COMMAND ----------
 
+import os
+
 # 1. Setup Test Environment
 # pyright: reportMissingImports=false, reportGeneralTypeIssues=false
 import time
 
+# Initialize the DataFrame class with caching capabilities
+from pyspark.sql import DataFrame
 from pyspark.sql import types as spark_types  # type: ignore
 from pyspark.sql.functions import col, lit, rand
 from pyspark.sql.functions import sum as spark_sum
 
-# Initialize the DataFrame class with caching capabilities
-from pyspark.sql import DataFrame
 from dbfs_spark_cache import extend_dataframe_methods
+
 # Import the dbfs-spark-cache module and its inner functions
-from dbfs_spark_cache.caching import (clear_cache_for_hash,
-                                      clear_caches_older_than,
-                                      clear_inconsistent_cache,
-                                      get_cache_metadata,
-                                      get_cached_dataframe_metadata,
-                                      get_cached_tables,
-                                      get_input_dir_mod_datetime,
-                                      get_query_plan, get_table_hash,
-                                      get_table_name_from_hash,
-                                      read_dbfs_cache_if_exist,
-                                      write_dbfs_cache)
+from dbfs_spark_cache.caching import (
+    # cacheToDbfs,
+    # wcd,
+    # withCachedDisplay,
+    # createCachedDataFrame,
+    clear_cache_for_hash,
+    clear_caches_older_than,
+    clear_inconsistent_cache,
+    get_cache_metadata,
+    get_cached_dataframe_metadata,
+    get_cached_tables,
+    get_input_dir_mod_datetime,
+    get_query_plan,
+    get_table_hash,
+    get_table_name_from_hash,
+    read_dbfs_cache_if_exist,
+    write_dbfs_cache,
+)
 from dbfs_spark_cache.config import config
 
 extend_dataframe_methods(spark, dbfs_cache_complexity_threshold=130) # Pass spark
@@ -176,6 +186,7 @@ print("---")
 help(DataFrame.wcd) # type: ignore # noqa: F821
 print("---")
 from dbfs_spark_cache.caching import __withCachedDisplay__
+
 help(__withCachedDisplay__)
 
 # COMMAND ----------
@@ -705,6 +716,7 @@ df_clear_mem.show()
 
 # 3. Get the hash and table name for the created cache
 from dbfs_spark_cache.caching import _hash_input_data, get_table_name_from_hash
+
 data_hash_clear_mem = _hash_input_data(data_clear_mem)
 table_name_clear_mem = get_table_name_from_hash(f"data_{data_hash_clear_mem}")
 print(f"Expected cache table name: {table_name_clear_mem}")
@@ -758,8 +770,7 @@ try:
     df_override_test.show()
 
     # Verify that the DataFrame was cached by createCachedDataFrame
-    from dbfs_spark_cache.caching import (_hash_input_data,
-                                          get_table_name_from_hash)
+    from dbfs_spark_cache.caching import _hash_input_data, get_table_name_from_hash
     data_hash_override = _hash_input_data(data_override)
     table_name_override = get_table_name_from_hash(f"data_{data_hash_override}")
     cache_exists_override = spark.catalog.tableExists(table_name_override)
