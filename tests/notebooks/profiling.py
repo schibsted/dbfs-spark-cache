@@ -124,5 +124,3 @@ spark_time = t3 - t2
 
 print(f"\n_hash_input_data time: {hash_time:.4f} s, ({second_hash_time:.4f}s second)")
 print(f"Spark createDataFrame time: {spark_time:.4f} s")
-
-# COMMAND ----------

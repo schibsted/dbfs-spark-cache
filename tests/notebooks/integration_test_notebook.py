@@ -140,6 +140,7 @@ from dbfs_spark_cache.dataframe_extensions import (
 )
 from dbfs_spark_cache.hashing import _hash_input_data
 from dbfs_spark_cache.utils import get_table_name_from_hash
+from dbfs_spark_cache import caching
 
 extend_dataframe_methods(spark, dbfs_cache_complexity_threshold=130) # Pass spark
 
@@ -192,11 +193,9 @@ print(f"CACHE_DATABASE: {config.CACHE_DATABASE}")
 
 help(extend_dataframe_methods)
 print("---")
-help(DataFrame.wcd) # type: ignore # noqa: F821
-print("---")
 # from dbfs_spark_cache.caching import __withCachedDisplay__ # Removed redundant import
 
-help(DataFrame.withCachedDisplay) # type: ignore # noqa: F821
+help(__withCachedDisplay__) # type: ignore # noqa: F821
 
 # COMMAND ----------
 
@@ -329,6 +328,12 @@ assert hash_name not in spark.sql(f"SHOW TABLES IN {config.CACHE_DATABASE}").toP
 
 # COMMAND ----------
 
+# Extra setup:
+from dbfs_spark_cache.config import config as app_config
+app_config.PREFER_SPARK_CACHE = False
+
+# COMMAND ----------
+
 # 4. Test DataFrame Extensions
 print("\nTesting DataFrame.cacheToDbfs...")
 print("Basic caching...")
@@ -362,9 +367,8 @@ print(f"Cache table {qualified_table_name_high} does not exist as expected: {not
 print("\nTesting deferred caching...")
 df_deferred = cacheToDbfs(df_simple, deferred=True)
 print(f"Deferred caching: {df_deferred}\n")
-# from dbfs_spark_cache.caching import cache_dataframes_in_queue_to_dbfs # Removed redundant import
 
-dbfs_spark_cache.caching.cache_dataframes_in_queue_to_dbfs()
+caching.cache_dataframes_in_queue_to_dbfs()
 print("Executed deferred caching\n")
 
 print("\nTesting cache invalidation with data changes...")
@@ -398,10 +402,6 @@ df_orig_clear_test = spark.createDataFrame(data_clear_test, schema_clear_test)
 # Save initial version
 df_orig_clear_test.write.format("delta").mode("overwrite").saveAsTable(table_name_clear_test)
 print(f"Created initial table {table_name_clear_test}")
-
-# COMMAND ----------
-
-clear_cache_for_hash("502cfb2d3ad357846fa0a49e361dbe14")
 
 # COMMAND ----------
 
@@ -509,9 +509,9 @@ print("\nMultiple caching test completed successfully.\n")
 
 # COMMAND ----------
 
-# from dbfs_spark_cache.caching import __withCachedDisplay__ # Removed redundant import
-withCachedDisplay = dbfs_spark_cache.caching.__withCachedDisplay__
-wcd = dbfs_spark_cache.caching.__withCachedDisplay__
+# from caching import __withCachedDisplay__ # Removed redundant import
+withCachedDisplay = caching.__withCachedDisplay__
+wcd = caching.__withCachedDisplay__
 
 # COMMAND ----------
 
@@ -638,7 +638,6 @@ print("\\n--- PREFER_SPARK_CACHE behavior tests completed ---")
 print("\nTesting chained cacheToDbfs with PREFER_SPARK_CACHE=True...")
 
 # Ensure PREFER_SPARK_CACHE is True for this test
-original_prefer_config_chained = app_config.PREFER_SPARK_CACHE
 app_config.PREFER_SPARK_CACHE = True
 print(f"Setting PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE} for chained test")
 
@@ -679,7 +678,7 @@ clearSparkCachedRegistry()
 assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty after chained test cleanup"
 
 # Restore original config
-app_config.PREFER_SPARK_CACHE = original_prefer_config_chained
+app_config.PREFER_SPARK_CACHE = False
 print(f"Restored PREFER_SPARK_CACHE to {app_config.PREFER_SPARK_CACHE}")
 
 print("\\n--- Chained cacheToDbfs with PREFER_SPARK_CACHE=True test completed ---")
@@ -879,7 +878,7 @@ schema_clear_mem = "a INT, b INT"
 
 # 2. Create and cache using createCachedDataFrame
 print("Creating and caching DataFrame with createCachedDataFrame...")
-df_clear_mem = spark.createCachedDataFrame(data_clear_mem, schema=schema_clear_mem)
+df_clear_mem = createCachedDataFrame(spark, data_clear_mem, schema=schema_clear_mem)
 df_clear_mem.show()
 
 # 3. Get the hash and table name for the created cache
@@ -908,51 +907,6 @@ print("\nclearDbfsCache with createCachedDataFrame test passed.\n")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC #### Test overriding spark.createDataFrame
-# MAGIC
-# MAGIC This tests the scenario described in the README where `spark.createDataFrame` is directly overridden.
-
-# COMMAND ----------
-
-print("\nTesting overridden spark.createDataFrame...")
-
-# Store the original method
-original_spark_create_dataframe = spark.createDataFrame
-
-try:
-    # Override spark.createDataFrame
-    spark.createDataFrame = spark.createCachedDataFrame
-    print("Overrode spark.createDataFrame with spark.createCachedDataFrame.")
-
-    # Create a DataFrame using the overridden method
-    data_override = [("Zack", 25, 60000.0), ("Yara", 31, 70000.0)]
-    schema_override = spark_types.StructType([
-        spark_types.StructField("name", spark_types.StringType(), True),
-        spark_types.StructField("age", spark_types.IntegerType(), True),
-        spark_types.StructField("salary", spark_types.DoubleType(), True)
-    ])
-    df_override_test = spark.createDataFrame(data_override, schema_override)
-    print("DataFrame created using overridden spark.createDataFrame:")
-    df_override_test.show()
-
-    # Verify that the DataFrame was cached by createCachedDataFrame
-    data_hash_override = _hash_input_data(data_override)
-    table_name_override = get_table_name_from_hash(f"data_{data_hash_override}")
-    cache_exists_override = spark.catalog.tableExists(table_name_override)
-    print(f"Cache table {table_name_override} exists: {cache_exists_override}")
-    assert cache_exists_override, f"Cache table {table_name_override} should exist after using overridden createDataFrame"
-    print("Cache existence verified.")
-
-finally:
-    # Restore the original method
-    spark.createDataFrame = original_spark_create_dataframe
-    print("Restored original spark.createDataFrame.")
-
-print("\nOverridden spark.createDataFrame test passed.\n")
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ### Test combining createCachedDataFrame with a normal cached DataFrame
 
 # COMMAND ----------
@@ -971,13 +925,13 @@ df_norm = spark.createDataFrame(data_norm, schema=schema_norm)
 assert_not_bad_plan(df_norm, should=True)
 
 # 2. Create a DataFrame using createCachedDataFrame
-df_norm_cached = spark.createCachedDataFrame(data_norm, schema=schema_norm)
+df_norm_cached = createCachedDataFrame(spark, data_norm, schema=schema_norm)
 assert_not_bad_plan(df_norm_cached)
 print("Normal cached DataFrame:")
 df_norm_cached.show()
 
 data_mem2 = [{"label": "C", "value": 3}, {"label": "D", "value": 4}]
-df_mem2 = spark.createCachedDataFrame(data_mem2, schema=schema_norm)
+df_mem2 = createCachedDataFrame(spark, data_mem2, schema=schema_norm)
 print("createCachedDataFrame DataFrame:")
 df_mem2.show()
 
@@ -1010,5 +964,3 @@ print("Combined caching test passed.\n")
 # COMMAND ----------
 
 print("Integration test passed!")
-
-# COMMAND ----------
