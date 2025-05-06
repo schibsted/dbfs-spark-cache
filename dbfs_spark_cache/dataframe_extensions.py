@@ -40,7 +40,7 @@ def cacheToDbfs(
     # Get query plan once and reuse it
     query_plan_str = get_query_plan(self)
 
-    if "Scan ExistingRDD" in query_plan_str:
+    if "Scan ExistingRDD" in query_plan_str and not should_prefer_spark_cache():
         log.info("DataFrame source is an existing RDD. Skipping DBFS cache.")
         return self
 
