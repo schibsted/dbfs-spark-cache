@@ -5,17 +5,21 @@ import IPython # type: ignore # Import IPython for the fallback
 
 def get_dbutils(spark):
     """
-    Helper function to get the dbutils object, handling different Databricks environments.
+    Helper function to get the dbutils object, compatible with both interactive and serverless environments.
     """
-    if spark.conf.get("spark.databricks.service.client.enabled") == "true":
-        from pyspark.dbutils import DBUtils # type: ignore
+    try:
+        import IPython
+        ipython = IPython.get_ipython()
+        if ipython is not None:
+            return ipython.user_ns["dbutils"]
+    except Exception:
+        pass
+
+    try:
+        from pyspark.dbutils import DBUtils  # type: ignore
         return DBUtils(spark)
-    else:
-        # Fallback for older Databricks environments or local testing with mocked dbutils
-        try:
-            return IPython.get_ipython().user_ns["dbutils"]
-        except Exception:
-            raise EnvironmentError("dbutils not available. This function is intended for Databricks notebooks.")
+    except ImportError:
+        raise ImportError("DBUtils is not available in this environment.")
 
 
 def set_and_get_workdir(spark):
@@ -81,6 +85,7 @@ def setup_dependencies(repo_path, spark):
         print(f"Installing latest wheel from {repo_path}/dist...")
         # Using os.system for clarity, consider subprocess for more control
         os.system(f"cd {repo_path} && pip install --force-reinstall --no-deps $(ls -t dist/*.whl | head -1)")
+        from dbfs_spark_cache import extend_dataframe_methods # ensure dependecies are working
 
         print("Restarting Python kernel...")
         dbutils.library.restartPython()
