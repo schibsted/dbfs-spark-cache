@@ -85,11 +85,10 @@ def import_from_file(
 
     return getattr(imp_module, obj_name)
 
-if "client." not in os.getenv("DATABRICKS_RUNTIME_VERSION", ""):
-    set_and_get_workdir = import_from_file('../notebook_utils.py', 'set_and_get_workdir')
-    setup_dependencies = import_from_file('../notebook_utils.py', 'setup_dependencies')
-    REPO_PATH = set_and_get_workdir(spark)
-    setup_dependencies(REPO_PATH, spark)
+set_and_get_workdir = import_from_file('../notebook_utils.py', 'set_and_get_workdir')
+setup_dependencies = import_from_file('../notebook_utils.py', 'setup_dependencies')
+REPO_PATH = set_and_get_workdir(spark)
+setup_dependencies(REPO_PATH, spark)
 
 # MAGIC %md
 # MAGIC ### Integration Test Notebook for dbfs-spark-cache
@@ -158,6 +157,7 @@ df_sql = spark.sql("SELECT * FROM test_db.employees")
 df_transformed = df_simple.groupBy("name").agg(spark_sum("salary").alias("total_salary"))
 
 # Print test environment info
+print(f'DATABRICKS_RUNTIME_VERSION: {os.environ.get("DATABRICKS_RUNTIME_VERSION", "")}')
 print(f"Spark version: {spark.version}")
 print(f"SPARK_CACHE_DIR: {config.SPARK_CACHE_DIR}")
 print(f"CACHE_DATABASE: {config.CACHE_DATABASE}")
