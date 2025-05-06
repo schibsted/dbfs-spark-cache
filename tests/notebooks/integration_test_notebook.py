@@ -533,17 +533,12 @@ from dbfs_spark_cache.config import config as app_config
 import os
 
 # --- Test PREFER_SPARK_CACHE behavior ---
-print("\\n--- Testing PREFER_SPARK_CACHE behavior ---")
+print("\\n--- Testing PREFER_SPARK_CACHE behavior (must be done with classic cluster) ---")
 
 # Scenario 1: Classic cluster, PREFER_SPARK_CACHE = True
 original_prefer_config = app_config.PREFER_SPARK_CACHE
 original_runtime_version = os.environ.get("DATABRICKS_RUNTIME_VERSION")
-
 app_config.PREFER_SPARK_CACHE = True
-if original_runtime_version: # Keep original if it exists
-    os.environ["DATABRICKS_RUNTIME_VERSION"] = "13.3.x-scala2.12" # Simulate classic
-else: # If it doesn't exist, set it then unset it
-    os.environ["DATABRICKS_RUNTIME_VERSION"] = "13.3.x-scala2.12"
 
 print(f"Simulating Classic Cluster (DATABRICKS_RUNTIME_VERSION={os.environ.get('DATABRICKS_RUNTIME_VERSION')}), PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
 assert should_prefer_spark_cache() is True, "should_prefer_spark_cache should be True on classic with PREFER_SPARK_CACHE=True"
@@ -575,7 +570,8 @@ app_config.PREFER_SPARK_CACHE = False
 print(f"\\nSimulating Classic Cluster, PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
 assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should be False on classic with PREFER_SPARK_CACHE=False"
 
-df_classic_prefer_false = df_simple.select("name", "salary")
+# Use a DataFrame with input files (from table) to test DBFS caching
+df_classic_prefer_false = df_sql.select("name", "salary")
 hash_classic_prefer_false = get_table_hash(df_classic_prefer_false)
 clear_cache_for_hash(hash_classic_prefer_false)
 clear_spark_cached_registry()
@@ -596,7 +592,7 @@ app_config.PREFER_SPARK_CACHE = True
 print(f"\\nSimulating Serverless Cluster (DATABRICKS_RUNTIME_VERSION={os.environ.get('DATABRICKS_RUNTIME_VERSION')}), PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE}")
 assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should be False on serverless regardless of PREFER_SPARK_CACHE"
 
-df_serverless_prefer_true = df_simple.select("age", "salary")
+df_serverless_prefer_true = df_sql.select("age", "salary")
 hash_serverless_prefer_true = get_table_hash(df_serverless_prefer_true)
 clear_cache_for_hash(hash_serverless_prefer_true)
 clear_spark_cached_registry()
