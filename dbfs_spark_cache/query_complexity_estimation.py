@@ -1,6 +1,7 @@
 """Query complexity estimation utilities."""
 import logging
 from typing import List
+from dbfs_spark_cache.utils import is_serverless_cluster
 
 from pyspark.sql import DataFrame
 
@@ -14,30 +15,71 @@ log = logging.getLogger(__name__)
 
 
 def get_input_file_sizes(df: DataFrame) -> List[float]:
-    """Get sizes of input files in GB using dbutils.fs.ls."""
-    if dbutils is None:
-        log.warning("dbutils not available, cannot get input file sizes.")
-        return []
-
+    """Get sizes of input files in GB, using dbutils.fs.ls on serverless and Hadoop API otherwise."""
     input_files = df.inputFiles()
-    file_sizes = []
-    for file_path in input_files:
+    if not input_files: # Optimization: if no input files, return early
+        log.debug("No input files found for DataFrame.")
+        return []
+    file_sizes: List[float] = []
+
+    if is_serverless_cluster():
+        log.debug("Running on a serverless cluster, using dbutils.fs.ls for file sizes.")
+        if dbutils is None:
+            log.warning("dbutils not available on a serverless cluster, cannot get input file sizes.")
+            return [] # Return empty list, as per original behavior if dbutils is missing
+
+        for file_path in input_files:
+            try:
+                # Use dbutils.fs.ls to get file status which includes size
+                # dbutils.fs.ls returns a list of FileInfo objects
+                file_info_list = dbutils.fs.ls(file_path)
+                if file_info_list:
+                    # Assuming inputFiles returns actual file paths, not directories
+                    # If it returns directories, we might need to list recursively
+                    file_size = float(file_info_list[0].size)
+                    # Convert bytes to GB
+                    file_sizes.append(file_size / (1024 * 1024 * 1024))
+                else:
+                    log.warning(f"dbutils.fs.ls returned empty list for {file_path}. Skipping size.")
+            except Exception as e:
+                # Skip files that can't be accessed or listed
+                log.warning(f"Could not get file size for {file_path} using dbutils.fs.ls: {e}. Skipping.")
+                continue
+    else:
+        log.debug("Running on a non-serverless cluster, using Hadoop API for file sizes.")
+        jsc = None
         try:
-            # Use dbutils.fs.ls to get file status which includes size
-            # dbutils.fs.ls returns a list of FileInfo objects
-            file_info_list = dbutils.fs.ls(file_path)
-            if file_info_list:
-                # Assuming inputFiles returns actual file paths, not directories
-                # If it returns directories, we might need to list recursively
-                file_size = float(file_info_list[0].size)
+            jsc = df.sparkSession._jsc
+            if jsc is None:
+                log.error("Java SparkContext (jsc) is None on a non-serverless cluster. Cannot get input file sizes via Hadoop API.")
+                return [] # Cannot proceed without jsc
+        except AttributeError: # pragma: no cover
+            # This case might be hard to test if SparkSession always has _jsc or raises different error
+            log.error("Could not access Java SparkContext (df.sparkSession._jsc). Cannot get input file sizes via Hadoop API.")
+            return [] # Cannot proceed without jsc
+
+        # Ensure _jvm is accessible
+        if not hasattr(df.sparkSession, '_jvm') or df.sparkSession._jvm is None: # pragma: no cover
+            log.error("SparkSession._jvm is not accessible. Cannot use Hadoop API for file sizes.")
+            return []
+
+        for file_path in input_files:
+            try:
+                # Access JVM Path class and create Path object
+                hadoop_path_class = df.sparkSession._jvm.org.apache.hadoop.fs.Path
+                path_obj = hadoop_path_class(file_path)
+
+                # Get FileSystem and FileStatus
+                fs = path_obj.getFileSystem(jsc.hadoopConfiguration())
+                file_status = fs.getFileStatus(path_obj)
+                file_size_bytes = float(file_status.getLen())
+
                 # Convert bytes to GB
-                file_sizes.append(file_size / (1024 * 1024 * 1024))
-            else:
-                 log.warning(f"dbutils.fs.ls returned empty list for {file_path}. Skipping size.")
-        except Exception as e:
-            # Skip files that can't be accessed or listed
-            log.warning(f"Could not get file size for {file_path} using dbutils.fs.ls: {e}. Skipping.")
-            continue
+                file_sizes.append(file_size_bytes / (1024 * 1024 * 1024))
+            except Exception as e: # pragma: no cover
+                # Broad exception catch as various issues can occur with FS interactions
+                log.warning(f"Could not get file size for {file_path} using Hadoop API: {e}. Skipping.")
+                continue
     return file_sizes
 
 

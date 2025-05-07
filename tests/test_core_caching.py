@@ -150,7 +150,6 @@ def test_write_dbfs_cache_with_existing_identical_cache(mock_spark_in_core_cachi
 
     result = core_caching.write_dbfs_cache(
         mock_dataframe,
-        replace=False, # Crucial: do not replace if identical
         query_plan=query_plan_val,
         input_dir_mod_datetime=input_dt_val,
         cache_path=config.SPARK_CACHE_DIR # Pass explicitly for clarity
@@ -194,3 +193,6 @@ def test_get_input_dir_mod_datetime_handles_schema_change(mock_core_datetime, mo
     args, _ = mock_core_log.warning.call_args
     assert "Could not get input files due to Delta schema change" in args[0]
     assert "Forcing cache invalidation" in args[0]
+
+# Tests for _get_data_hash_from_logical_plan and get_table_hash with logical plan analysis
+# These tests require a real SparkSession, assumed to be provided by a 'spark_session_testing' fixture from conftest.py

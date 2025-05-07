@@ -105,7 +105,9 @@ def test_cacheto_dbfs_new_cache(mock_core_dbutils, mock_dataframe, mock_spark_se
         mock_write_dbfs_cache.assert_called_once()
         # In the new implementation, write_dbfs_cache is called with df=self as a keyword argument
         assert mock_write_dbfs_cache.call_args.kwargs['df'] == mock_dataframe
-        assert mock_write_dbfs_cache.call_args.kwargs.get('replace') is True
+        # The 'replace' argument is not passed to write_dbfs_cache directly.
+        # The decision to replace or not is handled by cacheToDbfs before calling write_dbfs_cache.
+        # For a new cache scenario, write_dbfs_cache is called to create it.
         assert mock_write_dbfs_cache.call_args.kwargs.get('query_plan') == "SimplePlan"
         # cacheToDbfs now returns the DataFrame it was called on after writing
         assert result == mock_dataframe
@@ -242,10 +244,8 @@ def test_wcd_with_spark_cache(mock_core_dbutils, mock_dataframe):
 
     # Patch the cacheToDbfs method on the mock DataFrame
     with patch.object(mock_dataframe, 'cacheToDbfs') as mock_df_cacheToDbfs, \
-         patch('dbfs_spark_cache.core_caching.is_spark_cached') as mock_is_spark_cached, \
          patch.object(mock_dataframe, 'cache') as mock_df_cache_method, \
          patch('databricks.sdk.runtime.display', new=display_mock) as mock_display_func: # Patch display in dataframe_extensions
-        mock_is_spark_cached.return_value = False
         mock_df_cache_method.return_value = mock_dataframe
         result = mock_dataframe.withCachedDisplay(
             skip_dbfs_cache=True,

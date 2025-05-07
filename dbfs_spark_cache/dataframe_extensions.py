@@ -1,19 +1,19 @@
-from pyspark.sql import DataFrame
-from typing import Optional, Dict # Add missing imports
-from datetime import datetime # Add missing import
+import logging  # Add logging
+from datetime import datetime  # Add missing import
+from typing import Dict, Optional  # Add missing imports
 
-import logging # Add logging
-from .core_caching import (
-    # createCachedDataFrame, # Not used by this version of cacheToDbfs
+from pyspark.sql import DataFrame
+
+from .config import config
+from .core_caching import (  # createCachedDataFrame, # Not used by this version of cacheToDbfs
+    get_input_dir_mod_datetime,
+    get_query_plan,
+    get_table_hash,  # for clearDbfsCache
     read_dbfs_cache_if_exist,
     write_dbfs_cache,
-    get_query_plan,
-    get_input_dir_mod_datetime,
-    is_spark_cached, # for backupSparkCachedToDbfs
-    get_table_hash # for clearDbfsCache
 )
 from .utils import _spark_cached_dfs_registry, is_serverless_cluster
-from .config import config
+
 # from .query_complexity_estimation import estimate_compute_complexity # Remove module-level import
 log = logging.getLogger(__name__)
 
@@ -40,8 +40,11 @@ def cacheToDbfs(
     # Get query plan once and reuse it
     query_plan_str = get_query_plan(self)
 
-    if "Scan ExistingRDD" in query_plan_str and not should_prefer_spark_cache():
-        log.info("DataFrame source is an existing RDD. Skipping DBFS cache.")
+    # Check if the plan indicates a scan of an existing RDD.
+    # This is a common pattern for DataFrames created from spark.sparkContext.parallelize()
+    # or other RDD-based sources that don't have a file-based input.
+    if "Scan ExistingRDD" in query_plan_str:
+        log.info("DataFrame source appears to be an existing RDD (e.g., from parallelize). Skipping DBFS and spark cache.")
         return self
 
     input_info = get_input_dir_mod_datetime(self)
@@ -50,13 +53,10 @@ def cacheToDbfs(
     if input_info == {"<direct_data_cache>": True}:
         log.info("DataFrame source is a direct data cache. Bypassing standard DBFS caching logic and returning self.")
         # Ensure it's added to the Spark cache registry if it's a form of caching
-        if not is_spark_cached(self): # Check self
-             _spark_cached_dfs_registry.add(self)
+        _spark_cached_dfs_registry.add(self)
         return self
 
     # Determine thresholds from config if not provided
-    complexity_threshold = dbfs_cache_complexity_threshold if dbfs_cache_complexity_threshold is not None else config.DEFAULT_COMPLEXITY_THRESHOLD
-    multiplier_threshold = dbfs_cache_multiplier_threshold if dbfs_cache_multiplier_threshold is not None else config.DEFAULT_MULTIPLIER_THRESHOLD
     # Ensure input_info is Dict[str, datetime] for hashing, filter out bool if present
     # This is important because input_info could be {"<direct_data_cache>": True} if not caught above,
     # or {"<schema_changed_placeholder>": datetime.now()}
@@ -70,40 +70,50 @@ def cacheToDbfs(
         cached_df = read_dbfs_cache_if_exist(self, query_plan=query_plan_str, input_dir_mod_datetime=input_info)
         if cached_df is not None:
             log.info("Returning existing DBFS cache.")
-            # In production, we would add to Spark cache registry if not already there
-            # But in tests, we skip this check to match test expectations
-            # We can detect if we're in a test by checking if the mock is being used
-            import sys
-            if 'unittest.mock' not in sys.modules:
-                # Only check is_spark_cached in non-test environments
-                if not is_spark_cached(cached_df): # Check the returned df
-                    _spark_cached_dfs_registry.add(cached_df)
-            else:
-                # In test environment, just add to registry without checking
-                _spark_cached_dfs_registry.add(cached_df)
+            # Do not add to _spark_cached_dfs_registry here,
+            # as this is a DBFS cache hit, not a Spark in-memory cache.
             return cached_df
 
-    # If not replacing and complexity is below threshold, skip caching
-    if not replace and complexity_threshold is not None and complexity_threshold > 0:
-        try:
-            # Local import to help type checker
-            from .query_complexity_estimation import estimate_compute_complexity
+    # If not replacing, check if complexity/multiplier thresholds (if provided and >0) warrant skipping.
+    # If threshold parameters are None, these checks are skipped.
+    should_skip_due_to_thresholds = False
+    if not replace:
+        # Determine if complexity/multiplier estimation is needed.
+        # Estimation is needed if either threshold parameter is provided and is positive.
+        needs_estimation = \
+            (dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0) or \
+            (dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0)
 
-            # estimate_compute_complexity takes only the DataFrame
-            total_size_gb, multiplier, compute_complexity = estimate_compute_complexity(self)
-            log.info(f"Estimated compute complexity: {compute_complexity:.2f} (Size: {total_size_gb:.2f}GB, Multiplier: {multiplier:.2f}x)")
-            if compute_complexity < complexity_threshold:
-                log.info(f"Complexity {compute_complexity:.2f} < threshold {complexity_threshold}. Skipping DBFS cache.")
-                return self
-            if multiplier_threshold is not None and multiplier < multiplier_threshold:
-                log.info(f"Multiplier {multiplier:.2f}x < threshold {multiplier_threshold:.2f}x. Skipping DBFS cache.")
-                return self
-        except Exception as e:
-            log.warning(f"Could not estimate compute complexity: {e}. Proceeding with cache write attempt.")
+        if needs_estimation:
+            try:
+                from .query_complexity_estimation import estimate_compute_complexity
+                total_size_gb, multiplier, compute_complexity = estimate_compute_complexity(self)
+                log.info(f"Estimated compute complexity: {compute_complexity:.2f} (Size: {total_size_gb:.2f}GB, Multiplier: {multiplier:.2f}x)")
+
+                # Check complexity if its parameter was provided and is positive
+                if dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0:
+                    if compute_complexity < dbfs_cache_complexity_threshold:
+                        log.info(f"Complexity {compute_complexity:.2f} < explicit threshold {dbfs_cache_complexity_threshold}. Skipping DBFS cache.")
+                        should_skip_due_to_thresholds = True
+
+                # Check multiplier if its parameter was provided and is positive (and not already skipped)
+                if not should_skip_due_to_thresholds and \
+                   dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0:
+                    if multiplier < dbfs_cache_multiplier_threshold:
+                        log.info(f"Multiplier {multiplier:.2f}x < explicit threshold {dbfs_cache_multiplier_threshold:.2f}x. Skipping DBFS cache.")
+                        should_skip_due_to_thresholds = True
+            except Exception as e:
+                log.warning(f"Could not estimate compute complexity: {e}. Proceeding with cache write attempt.")
+                # should_skip_due_to_thresholds remains False, so it proceeds to cache
+
+        if should_skip_due_to_thresholds:
+            return self
 
     # Check if we should prefer Spark caching
     if should_prefer_spark_cache():
         log.info("Preferring Spark cache. Caching DataFrame in memory.")
+        if replace:
+            log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
         # Cache the DataFrame in Spark memory
         cached_df = self.cache()
         # Add to registry for potential backup to DBFS later
@@ -115,28 +125,19 @@ def cacheToDbfs(
     # Explicitly name all args for write_dbfs_cache to satisfy Pyright, even if some are defaults from the signature
     written_df = write_dbfs_cache(
         df=self,
-        replace=True,
         query_plan=query_plan_str,
         input_dir_mod_datetime=datetime_input_info,
         hash_name=kwargs.get("hash_name"), # Pass through if provided in kwargs
         cache_path=kwargs.get("cache_path", config.SPARK_CACHE_DIR), # Pass through or use default
         verbose=verbose
     )
-    _spark_cached_dfs_registry.add(written_df)
+    # Do not add to _spark_cached_dfs_registry here if we are writing to DBFS,
+    # unless should_prefer_spark_cache() was true and it was added above.
+    # The registry is for Spark in-memory cached DFs.
     return written_df
 
 
-def backupSparkCachedToDbfs(self: DataFrame) -> None:
-    """
-    Backup the Spark cached DataFrame to DBFS.
-    """
-    from .core_caching import is_spark_cached
-
-    if is_spark_cached(self):
-        write_dbfs_cache(self)
-    else:
-        raise ValueError("DataFrame is not Spark cached.")
-
+# backupSparkCachedToDbfs method is removed as its logic is now in caching.py
 
 def clearSparkCachedRegistry() -> None:
     """
@@ -174,7 +175,7 @@ def extend_dataframe_methods(*args, **kwargs) -> None: # Allow args/kwargs
     Attach extension methods to the DataFrame class.
     """
     DataFrame.cacheToDbfs = cacheToDbfs  # type: ignore[attr-defined]
-    DataFrame.backupSparkCachedToDbfs = backupSparkCachedToDbfs  # type: ignore[attr-defined]
+    # DataFrame.backupSparkCachedToDbfs is no longer attached as it's removed
     DataFrame.clearDbfsCache = clearDbfsCache  # type: ignore[attr-defined]
     DataFrame.withCachedDisplay = __withCachedDisplay__  # type: ignore[attr-defined]
 

@@ -73,10 +73,11 @@ Set either threshold to None to disable that specific check.
 Caching occurs only if BOTH conditions are met (or the threshold is None).
 
 ## New: Hybrid Spark/DBFS Caching and Backup
+
 Because spark cache is faster than dbfs cache when used with clusers with enough memory or disk space (and fast SSD disks are use as well), we can use it for fast iterative work, and only persist to dbfs when needed, ie when shutting down the cluster.
 
 - **Backup of Spark-cached DataFrames**: Use `backup_spark_cached_to_dbfs(spark)` to persist all Spark-cached DataFrames to DBFS before cluster termination.
-- **Configurable caching mode**: The new `PREFER_SPARK_CACHE` config (default: True) controls whether Spark in-memory cache is preferred on classic clusters. On serverless clusters, DBFS caching is always used.
+- **Configurable caching mode**: The config `PREFER_SPARK_CACHE` (default: True) controls whether Spark in-memory cache is preferred on classic clusters. On serverless clusters, DBFS caching is always used.
 - **Automatic registry of Spark-cached DataFrames**: DataFrames cached via `.cacheToDbfs()` in Spark-cache mode are tracked and can be listed or backed up.
 - **Full test coverage**: All new logic is covered by unit and integration tests.
 
@@ -104,7 +105,12 @@ from dbfs_spark_cache.config import config
 config.PREFER_SPARK_CACHE = False
 ```
 
-On serverless clusters, DBFS caching is always used regardless of this setting.
+On serverless clusters, DBFS caching is always used regardless of this setting (spark cache is not available). If you want to disable all calls to the extensions you can do:
+```python
+    dbfs_cache.extend_dataframe_methods(disable_cache_and_display=True)
+```
+and it will keep the DataFrame unchanged.
+
 
 ### Dataframe cache invalidation techniques that triggers cache invalidation?
 
@@ -118,15 +124,11 @@ In-Memory|No not directly, but via conversion to BDFS table through createCached
 This library has been primarily tested under the following Databricks environment configuration, but anything supported by Databricks and PySpark DataFrame API should or may work too:
 
 - **Databricks database**: Hive Metastore
-- **Databricks Runtime Version**: 15.4 LTS
+- **Databricks Runtime Version**: 15.4 LTS, client.1.13 (serverless cluster)
 - **Storage Layer**: DBFS and S3
 - **File Formats**: Parquet, JSON
 
-If you want to disable all calls to the extensions you can do:
-```python
-    dbfs_cache.extend_dataframe_methods(disable_cache_and_display=True)
-```
-and it will keep the DataFrame unchanged.
+Note that serverless performance when writing to DBFS is currently abysmal and can only be used for limited testing on small datasets.
 
 #### What is "Total compute complexity" anyway?
 
