@@ -176,7 +176,11 @@ def createCachedDataFrame(
             metadata_exists = False
         if not metadata_exists:
              log.warning(f"Attempting to use table {table_name} despite missing metadata.")
-        return spark_session.read.table(table_name)
+        df_read = spark_session.read.table(table_name)
+        # Tag DataFrame as direct data cache for later hash detection
+        setattr(df_read, "_is_direct_data_cache", True)
+        setattr(df_read, "_direct_data_cache_hash", cache_hash_name)
+        return df_read
     else:
         log.info(f"Creating new direct data cache: {table_name}")
         try:
@@ -195,11 +199,18 @@ def createCachedDataFrame(
             write_meta(metadata_file_path, metadata_txt)
             log.info(f"Metadata written to {metadata_file_path}")
 
-            return spark_session.read.table(table_name)
+            df_read = spark_session.read.table(table_name)
+            # Tag DataFrame as direct data cache for later hash detection
+            setattr(df_read, "_is_direct_data_cache", True)
+            setattr(df_read, "_direct_data_cache_hash", cache_hash_name)
+            return df_read
 
         except Exception as e:
             log.error(f"Failed during createCachedDataFrame cache miss processing: {e}")
             raise
+
+
+# _is_plan_complex function removed as per revised plan
 
 
 def get_input_dir_mod_datetime(df: DataFrame) -> Union[Dict[str, datetime], Dict[str, bool]]:
@@ -215,87 +226,78 @@ def get_input_dir_mod_datetime(df: DataFrame) -> Union[Dict[str, datetime], Dict
             ls_files = dbutils.fs.ls(dir_path)
             relevant_files = [fi for fi in ls_files if fi.name != "_delta_log/"]
             if not relevant_files:
-                try:
+                try: # Check modification time of the directory itself if no relevant files found
                     dir_info = dbutils.fs.ls(dir_path.rstrip('/'))
-                    if dir_info:
+                    if dir_info: # Ensure dir_info is not empty
                         return datetime.fromtimestamp(dir_info[0].modificationTime / 1000)
-                except Exception:
-                    pass
-                return None
+                except Exception: # pylint: disable=broad-except
+                    pass # Fall through if directory info cannot be fetched
+                return None # No relevant files and no directory info
 
             latest_mod_time = max(fi.modificationTime for fi in relevant_files)
             return datetime.fromtimestamp(latest_mod_time / 1000)
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-except
              if "FileNotFoundException" in str(e) or "does not exist" in str(e):
                  log.warning(f"Input path {dir_path} does not exist.")
              else:
                  log.warning(f"Could not list files in {dir_path} using dbutils: {e}. Skipping timestamp check.")
              return None
 
+    plan = get_query_plan(df) # Get plan upfront
+
+    # Check 1: Is it reading from a catalog 'data_*' table (created by createCachedDataFrame)?
+    db_name_for_data_table_check = config.CACHE_DATABASE # Direct access is preferred
+    if _find_catalog_table_pattern_in_text(plan, db_name_for_data_table_check, "data_"):
+        # Revised Plan: If source is a catalog data_* table, always treat as non-bypass candidate.
+        # Return {} to force standard caching logic based on the current plan.
+        log.debug("DataFrame reads from a catalog 'data_*' table. Proceeding with standard cache logic (not bypassing).")
+        return {}
+
+    # If not a catalog 'data_*' table, proceed to check inputFiles for other cache types or real sources.
     input_files: List[str] = []
     dir_paths: set[str] = set()
     try:
         input_files = df.inputFiles()
-        dir_paths = set(os.path.dirname(f) for f in input_files)
+        dir_paths = set(os.path.dirname(f) for f in input_files) # Use os.path.dirname
     except Py4JJavaError as e:
         error_str = str(e)
         if "DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str or "DeltaAnalysisException: DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str:
             log.warning("Could not get input files due to Delta schema change: %s. Forcing cache invalidation.", e)
             return {"<schema_changed_placeholder>": datetime.now()}
-        else:
-            raise e
-    except Exception as e:
+        raise e # Re-raise if not the specific Delta error
+    except Exception as e: # pylint: disable=broad-except
+        # Broader catch for other unexpected errors from inputFiles(), including potential AnalysisException for missing tables
         error_str = str(e)
-        if "DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str or "DeltaAnalysisException: DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str:
-            log.warning("Could not get input files due to Delta schema change: %s. Forcing cache invalidation.", e)
+        if "DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str or "DeltaAnalysisException: DELTA_SCHEMA_CHANGE_SINCE_ANALYSIS" in error_str: # Duplicate check, but fine
+            log.warning("Could not get input files due to Delta schema change (general exception): %s. Forcing cache invalidation.", e)
             return {"<schema_changed_placeholder>": datetime.now()}
         log.warning(f"Could not get input files for DataFrame: {e}. Treating as empty source.")
-        return {}
+        return {} # Treat as empty/unknown source if inputFiles fails for other reasons
 
     if not input_files:
-        log.debug("DataFrame has no input files according to df.inputFiles(). Checking plan.")
-        plan = get_query_plan(df)
-        db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
-        if _find_catalog_table_pattern_in_text(plan, db_name, "data_"):
-             log.debug("Detected direct data cache source via query plan for empty inputFiles.")
-             return {"<direct_data_cache>": True}
-        else:
-             log.warning("DataFrame has no input files and doesn't seem to read from a data_* cache table.")
-             return {}
+        # No input files and not a catalog data_* table (checked above).
+        # This could be df.parallelize(), df created from empty list, etc.
+        # These are handled by "Scan ExistingRDD" check in dataframe_extensions.py or result in empty source here.
+        log.debug("DataFrame has no input files and is not a catalog 'data_*' table.")
+        return {}
 
-    first_data_cache_dir: Optional[str] = None
-    all_direct = True
-    base_dir = config.SPARK_CACHE_DIR.rstrip('/') + '/'
-    pattern = rf"^({re.escape(base_dir)}data_[a-f0-9]{{32}})/?.*$"
-
-    for f_path_full in input_files:
-        match = re.match(pattern, f_path_full)
-        if match:
-            current_cache_dir = match.group(1) + "/"
-            if first_data_cache_dir is None:
-                first_data_cache_dir = current_cache_dir
-            elif first_data_cache_dir != current_cache_dir:
-                log.warning("Mixed data_* cache directories detected in input files.")
-                all_direct = False
-                break
-        else:
-            all_direct = False
-            break
-
-    if all_direct and first_data_cache_dir:
-        log.debug(f"Detected DataFrame source is exclusively from direct data cache: {first_data_cache_dir}")
-        return {"<direct_data_cache>": True}
-    elif first_data_cache_dir:
-        log.warning("DataFrame reads from a mix of direct data cache and other sources. Proceeding with standard source analysis.")
-
+    # Collect modification times for actual source directories,
+    # skipping standard DBFS cache directories (hex-named under SPARK_CACHE_DIR).
     final_sources: Dict[str, datetime] = {}
-    cache_dir_pattern = rf"^{re.escape(base_dir)}[a-f0-9]{{32}}/?$"
+    # Pattern for standard cache directories in SPARK_CACHE_DIR (hex hash name, not data_ prefixed)
+    # These are caches written by write_dbfs_cache with an arbitrary hash.
+    standard_cache_dir_base = config.SPARK_CACHE_DIR.rstrip('/')
+    # Regex: ^<escaped_base_dir>/[a-f0-9]{32}/?$
+    # Ensure standard_cache_dir_base itself is properly escaped if it contains regex special chars.
+    # However, typical paths like /dbfs/FileStore/tables/cache/ are unlikely to.
+    standard_cache_dir_pattern_str = f"^{re.escape(standard_cache_dir_base)}/[a-f0-9]{{32}}/?$"
 
-    for d in sorted(list(dir_paths)):
-         if not re.match(cache_dir_pattern, d):
-              dtime = last_mod_datetime_from_dbfs_dir(d)
-              if dtime:
-                  final_sources[d] = dtime
+    for d_path_str in sorted(list(dir_paths)):
+        # If the directory 'd_path_str' is NOT a standard cache path
+        if not re.match(standard_cache_dir_pattern_str, d_path_str):
+            mod_time = last_mod_datetime_from_dbfs_dir(d_path_str)
+            if mod_time:
+                final_sources[d_path_str] = mod_time
     return final_sources
 
 
@@ -564,12 +566,24 @@ def get_table_hash(df: DataFrame) -> str:
     plan_str = get_query_plan(df)
     db_name = getattr(config, "CACHE_DATABASE", "spark_cache")
 
+    # If DataFrame was tagged as direct data cache, return its original hash immediately
+    if getattr(df, "_is_direct_data_cache", False):
+        original_hash = getattr(df, "_direct_data_cache_hash", None)
+        if original_hash:
+            log.info(f"Using tagged direct data cache hash for DataFrame: {original_hash}")
+            return original_hash
+
+    # Next, if the plan references a direct data cache table, return that hash only for pure scans
     data_hash_match = _find_catalog_table_pattern_in_text(plan_str, db_name, "data_")
     if data_hash_match:
-        log.info(f"Identified direct data cache read from plan: {data_hash_match}")
-        return data_hash_match
-
-    # log.debug(f"No direct data cache pattern (data_ prefix) found in plan:\n{plan_str}") # Optional logging
+        # Ensure no additional operations beyond scan (e.g., no Project, Filter, Join)
+        relation_pattern = rf"Relation\[.*\] {re.escape(db_name)}\.{re.escape(data_hash_match)}"
+        plan_without_relation = re.sub(relation_pattern, "", plan_str).strip()
+        # Only return direct data cache hash if nothing else remains in plan
+        if not plan_without_relation:
+            log.info(f"Identified pure direct data cache scan in plan: {data_hash_match}")
+            return data_hash_match
+        log.debug(f"Direct data cache referenced but plan has extra operations, computing new hash. Remainder: {plan_without_relation[:100]}")
 
     input_dir_mod_datetime_raw = get_input_dir_mod_datetime(df)
     input_dir_mod_datetime: Dict[str, datetime] = {}

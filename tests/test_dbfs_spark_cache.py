@@ -27,12 +27,12 @@ def test_extend_dataframe_methods(mock_dataframe_extensions_databricks_env):
 
     from dbfs_spark_cache import extend_dataframe_methods
 
-    # The fixture provides the mock spark session and display function
+    # The fixture provides the mock spark session
     mock_spark_session = mock_dataframe_extensions_databricks_env['spark_session']
-    mock_display_fn = mock_dataframe_extensions_databricks_env['display_fun']
+    # mock_display_fn = mock_dataframe_extensions_databricks_env['display_fun'] # Unused
 
     # Call the initialization function
-    extend_dataframe_methods(spark_session=mock_spark_session, display_fun=mock_display_fn)
+    extend_dataframe_methods(spark_session=mock_spark_session)
 
     # Assert that the methods have been added to the global DataFrame class
     assert hasattr(DataFrame, 'withCachedDisplay')
@@ -266,7 +266,7 @@ def test_cacheToDbfs_prefer_spark_cache_no_dbfs_cache_exists():
     assert result_df is mock_df_input
 
 
-def test_backup_spark_cached_to_dbfs_explicit_list(mock_spark_session): # Add mock_spark_session fixture
+def test_backup_spark_cached_to_dbfs_explicit_list():
     """Test backup_spark_cached_to_dbfs with an explicit list of DataFrames."""
     from dbfs_spark_cache import caching
 
@@ -293,18 +293,22 @@ def test_backup_spark_cached_to_dbfs_explicit_list(mock_spark_session): # Add mo
     # Patch write_dbfs_cache within the caching module where backup_spark_cached_to_dbfs calls it
     with patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect), \
          patch('dbfs_spark_cache.caching.write_dbfs_cache') as mock_write_cache, \
-         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"): # Mock get_table_hash
+         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"), \
+         patch('dbfs_spark_cache.caching.estimate_compute_complexity', return_value=(10.0, 3.0, 1.0)) as mock_estimate_complexity:
 
-        # Call the function with mock session and our mocks
-        caching.backup_spark_cached_to_dbfs(mock_spark_session, specific_dfs=[mock_df1, mock_df2])
+        # Call the function with our mocks
+        caching.backup_spark_cached_to_dbfs(specific_dfs=[mock_df1, mock_df2])
 
     # Verify write_dbfs_cache was called for both DataFrames
+    # When specific_dfs is provided, estimate_compute_complexity is called once per DF
+    # during pre-filtering since there's no stored complexity
+    assert mock_estimate_complexity.call_count == 2
     assert mock_write_cache.call_count == 2
     mock_write_cache.assert_any_call(mock_df1)
     mock_write_cache.assert_any_call(mock_df2)
 
 
-def test_backup_spark_cached_to_dbfs_uses_registry(mock_spark_session): # Add mock_spark_session fixture
+def test_backup_spark_cached_to_dbfs_uses_registry():
     """Test backup_spark_cached_to_dbfs uses the internal registry."""
     from dbfs_spark_cache import caching
     from dbfs_spark_cache import utils as cache_utils # Import utils to access registry
@@ -317,8 +321,11 @@ def test_backup_spark_cached_to_dbfs_uses_registry(mock_spark_session): # Add mo
 
 
     # Add the mock DataFrame to the actual registry (which is in utils)
-    original_registry_content = list(cache_utils._spark_cached_dfs_registry)
-    cache_utils._spark_cached_dfs_registry.add(mock_df)
+    original_registry_content = dict(cache_utils._spark_cached_dfs_registry) # Store as dict
+    import weakref
+    # Add with a mock complexity tuple
+    mock_complexity = (10.0, 3.0, 1.0)
+    cache_utils._spark_cached_dfs_registry[id(mock_df)] = (weakref.ref(mock_df), mock_complexity)
 
 
     # Mock the isinstance check
@@ -330,22 +337,27 @@ def test_backup_spark_cached_to_dbfs_uses_registry(mock_spark_session): # Add mo
     # Patch write_dbfs_cache and get_table_hash
     with patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect), \
          patch('dbfs_spark_cache.caching.write_dbfs_cache') as mock_write_cache, \
-         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"): # Mock get_table_hash
+         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"):
+        # No need to patch estimate_compute_complexity as it shouldn't be called when reading from registry
 
-        # Call the function without specific_dfs, using mock session
+        # Call the function without specific_dfs
         # It should read from the patched registry (which now contains mock_df)
-        caching.backup_spark_cached_to_dbfs(mock_spark_session)
+        caching.backup_spark_cached_to_dbfs()
 
-    # Verify write_dbfs_cache was called for the DataFrame from the registry
-    mock_write_cache.assert_called_once_with(mock_df)
+        # Verify write_dbfs_cache was called for the DataFrame from the registry
+        # estimate_compute_complexity should NOT be called as complexity is read from registry
+        # mock_estimate_complexity.assert_not_called() # Cannot assert on non-existent mock
+        mock_write_cache.assert_called_once_with(mock_df)
 
     # Clean up registry
-    cache_utils._spark_cached_dfs_registry.clear()
-    for item in original_registry_content:
-        cache_utils._spark_cached_dfs_registry.add(item)
+    for key, value_ref in original_registry_content.items():
+        # Ensure we are adding back valid weakrefs if they were stored that way,
+        # or re-wrap if original_registry_content stored direct objects.
+        # Assuming original_registry_content stored weakrefs:
+        cache_utils._spark_cached_dfs_registry[key] = value_ref
 
 
-def test_backup_spark_cached_unpersists_if_flagged(mock_spark_session): # Add mock_spark_session fixture
+def test_backup_spark_cached_unpersists_if_flagged():
     """Test backup_spark_cached_to_dbfs unpersists DataFrame if unpersist_after_backup is True."""
     from dbfs_spark_cache import caching
 
@@ -365,14 +377,17 @@ def test_backup_spark_cached_unpersists_if_flagged(mock_spark_session): # Add mo
     # Patch write_dbfs_cache and get_table_hash
     with patch('dbfs_spark_cache.caching.isinstance', side_effect=isinstance_side_effect), \
          patch('dbfs_spark_cache.caching.write_dbfs_cache') as mock_write_cache, \
-         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"): # Mock get_table_hash
+         patch('dbfs_spark_cache.caching.get_table_hash', return_value="mockhash"), \
+         patch('dbfs_spark_cache.caching.estimate_compute_complexity', return_value=(10.0, 3.0, 1.0)) as mock_estimate_complexity:
 
-        # Call the function with mock session, unpersist_after_backup=True
-        caching.backup_spark_cached_to_dbfs(mock_spark_session, specific_dfs=[mock_df], unpersist_after_backup=True)
+        # Call the function with unpersist_after_backup=True
+        caching.backup_spark_cached_to_dbfs(specific_dfs=[mock_df], unpersist_after_backup=True)
 
-    # Verify write was called and unpersist was called
-    mock_write_cache.assert_called_once_with(mock_df)
-    mock_df.unpersist.assert_called_once()
+        # Verify write was called and unpersist was called
+        # estimate_compute_complexity is called once during pre-filter when specific_dfs is used
+        assert mock_estimate_complexity.call_count == 1
+        mock_write_cache.assert_called_once_with(mock_df)
+        mock_df.unpersist.assert_called_once()
 
 
 def test_clear_spark_cached_registry():
@@ -385,11 +400,15 @@ def test_clear_spark_cached_registry():
 
     mock_df1 = MagicMock()
     mock_df2 = MagicMock()
-    cache_utils._spark_cached_dfs_registry.add(mock_df1) # Add to utils registry
-    cache_utils._spark_cached_dfs_registry.add(mock_df2) # Add to utils registry
+    import weakref
+    # Add with None complexity for this test
+    cache_utils._spark_cached_dfs_registry[id(mock_df1)] = (weakref.ref(mock_df1), None)
+    cache_utils._spark_cached_dfs_registry[id(mock_df2)] = (weakref.ref(mock_df2), None)
     assert len(cache_utils._spark_cached_dfs_registry) == 2
 
-    caching.clearSparkCachedRegistry() # This function should clear utils._spark_cached_dfs_registry
+    # clearSparkCachedRegistry is in dataframe_extensions
+    from dbfs_spark_cache import dataframe_extensions
+    dataframe_extensions.clearSparkCachedRegistry()
     assert len(cache_utils._spark_cached_dfs_registry) == 0
 
 
@@ -421,8 +440,11 @@ def test_cacheToDbfs_deferred_prefer_spark_cache():
              patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
              patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None), \
              patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(1.0, 2.0, 200.0)), \
-             patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry", new_callable=MagicMock) as mock_registry: # Patch dataframe_extensions registry
-            mock_registry.add = MagicMock()
+             patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry") as mock_registry: # Patch registry where it's used
+            # mock_registry is now an OrderedDict mock
+            # We need to mock its __setitem__ if we want to assert on additions
+            # For simplicity, we'll assume the add logic in dataframe_extensions works
+            # and focus on the cacheToDbfs behavior.
 
             # Call as a method - deferred parameter removed
             result_df = mock_df_input.cacheToDbfs()
@@ -430,10 +452,10 @@ def test_cacheToDbfs_deferred_prefer_spark_cache():
             # In our implementation, we don't check is_spark_cached when PREFER_SPARK_CACHE is True
             # We just directly call df.cache(), so update the test to check that
             mock_df_input.cache.assert_called_once()
-            mock_registry.add.assert_called_once()
-            assert result_df is mock_df_input
-            mock_df_input.cache.assert_called_once() # Eagerly spark-caches
-            mock_registry.add.assert_called_with(mock_df_input) # Eagerly registers
+            # Assert that the registry (mocked OrderedDict) had an item set
+            # The key would be id(mock_df_input), value is (weakref, complexity_tuple)
+            # Complexity tuple was (1.0, 2.0, 200.0) in this test's patch
+            mock_registry.__setitem__.assert_called_once_with(id(mock_df_input), (ANY, (1.0, 2.0, 200.0)))
             assert result_df is mock_df_input
     finally:
         app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache

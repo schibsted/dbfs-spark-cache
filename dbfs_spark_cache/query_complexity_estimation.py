@@ -227,9 +227,22 @@ def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:
     file_sizes = get_input_file_sizes(df)
     total_size = sum(file_sizes)
 
-    # If no input files or zero size, complexity is 0
+    # If no input files or zero size, log a warning and return base multiplier
     if not total_size:
-        return 0.0, 1.0, 0.0  # Return default multiplier and zero size
+        log.warning("Could not determine input file sizes (df.inputFiles() might be empty due to transformations or RDD lineage). Complexity estimation will be based on plan only.")
+        # Return 0 complexity, base multiplier, and 0 size.
+        # The multiplier calculation below will still run based on the plan.
+        # We return 0 size explicitly.
+        # Let's calculate the multiplier based on the plan even without size.
+        from dbfs_spark_cache.caching import get_query_plan
+        query_plan_str = get_query_plan(df).lower()
+        if query_plan_str.startswith("error:"):
+             log.warning(f"Could not get query plan for complexity estimation: {query_plan_str}. Returning base complexity.")
+             return 0.0, 1.0, 0.0 # Base multiplier, 0 size, 0 complexity
+
+        # Calculate multiplier based on plan, but complexity is 0 due to unknown size
+        _, multiplier = _calculate_complexity_from_plan(query_plan_str, 0.0) # Pass 0 size
+        return 0.0, multiplier, 0.0 # Return 0 complexity, calculated multiplier, 0 size
 
     from dbfs_spark_cache.caching import get_query_plan
     query_plan_str = get_query_plan(df).lower()

@@ -40,7 +40,7 @@ from dbfs_spark_cache.caching import (
 # from dbfs_spark_cache.dataframe_extensions import display
 from dbfs_spark_cache.config import config
 
-extend_dataframe_methods()
+# extend_dataframe_methods() # This is now handled by the mock_dataframe_extensions_databricks_env fixture
 
 @pytest.fixture
 def mock_dataframe(mock_spark_session):
@@ -149,6 +149,8 @@ def test_cacheto_dbfs_below_threshold(mock_core_dbutils, mock_dataframe):
 
     # Attach the cacheToDbfs method to the mock DataFrame
     mock_dataframe.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_dataframe, **kwargs)
+    # Mock .cache() to return self for this test case
+    mock_dataframe.cache.return_value = mock_dataframe
 
     mock_core_dbutils.fs.ls.return_value = []
     mock_core_dbutils.fs.head.side_effect = Exception("File not found")

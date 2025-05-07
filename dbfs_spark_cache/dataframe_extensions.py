@@ -1,11 +1,13 @@
 import logging  # Add logging
 from datetime import datetime  # Add missing import
-from typing import Dict, Optional  # Add missing imports
+from typing import Dict, Optional # Add missing imports
+from functools import partial # Add import for partial
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 
 from .config import config
-from .core_caching import (  # createCachedDataFrame, # Not used by this version of cacheToDbfs
+from .core_caching import (
+    createCachedDataFrame,
     get_input_dir_mod_datetime,
     get_query_plan,
     get_table_hash,  # for clearDbfsCache
@@ -52,8 +54,6 @@ def cacheToDbfs(
     # Check for direct data cache bypass condition
     if input_info == {"<direct_data_cache>": True}:
         log.info("DataFrame source is a direct data cache. Bypassing standard DBFS caching logic and returning self.")
-        # Ensure it's added to the Spark cache registry if it's a form of caching
-        _spark_cached_dfs_registry.add(self)
         return self
 
     # Determine thresholds from config if not provided
@@ -74,50 +74,73 @@ def cacheToDbfs(
             # as this is a DBFS cache hit, not a Spark in-memory cache.
             return cached_df
 
-    # If not replacing, check if complexity/multiplier thresholds (if provided and >0) warrant skipping.
-    # If threshold parameters are None, these checks are skipped.
+    # --- Complexity Estimation (Moved earlier) ---
+    # Estimate complexity regardless of thresholds, for logging purposes,
+    # but only if we didn't hit an existing DBFS cache.
+    compute_complexity: Optional[float] = None
+    multiplier: Optional[float] = None
+    total_size_gb: Optional[float] = None
+    try:
+        from .query_complexity_estimation import estimate_compute_complexity
+        # Note: estimate_compute_complexity returns (complexity, multiplier, size)
+        est_complexity, est_multiplier, est_size_gb = estimate_compute_complexity(self)
+        compute_complexity = est_complexity
+        multiplier = est_multiplier
+        total_size_gb = est_size_gb
+        log.info(f"Estimated compute complexity: {compute_complexity:.2f} (Size: {total_size_gb:.5f}GB, Multiplier: {multiplier:.2f}x)")
+    except Exception as e:
+        log.warning(f"Could not estimate compute complexity: {e}. Proceeding without complexity-based threshold checks.")
+        # Keep complexity values as None
+
+    # --- Threshold Checks (if not replacing) ---
     should_skip_due_to_thresholds = False
     if not replace:
-        # Determine if complexity/multiplier estimation is needed.
-        # Estimation is needed if either threshold parameter is provided and is positive.
-        needs_estimation = \
-            (dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0) or \
-            (dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0)
+        # Check complexity threshold if estimation was successful and threshold is set
+        if compute_complexity is not None and dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0:
+            if compute_complexity < dbfs_cache_complexity_threshold:
+                log.info(f"Complexity {compute_complexity:.2f} < explicit threshold {dbfs_cache_complexity_threshold}. Skipping DBFS cache.")
+                should_skip_due_to_thresholds = True
 
-        if needs_estimation:
-            try:
-                from .query_complexity_estimation import estimate_compute_complexity
-                total_size_gb, multiplier, compute_complexity = estimate_compute_complexity(self)
-                log.info(f"Estimated compute complexity: {compute_complexity:.2f} (Size: {total_size_gb:.2f}GB, Multiplier: {multiplier:.2f}x)")
-
-                # Check complexity if its parameter was provided and is positive
-                if dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0:
-                    if compute_complexity < dbfs_cache_complexity_threshold:
-                        log.info(f"Complexity {compute_complexity:.2f} < explicit threshold {dbfs_cache_complexity_threshold}. Skipping DBFS cache.")
-                        should_skip_due_to_thresholds = True
-
-                # Check multiplier if its parameter was provided and is positive (and not already skipped)
-                if not should_skip_due_to_thresholds and \
-                   dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0:
-                    if multiplier < dbfs_cache_multiplier_threshold:
-                        log.info(f"Multiplier {multiplier:.2f}x < explicit threshold {dbfs_cache_multiplier_threshold:.2f}x. Skipping DBFS cache.")
-                        should_skip_due_to_thresholds = True
-            except Exception as e:
-                log.warning(f"Could not estimate compute complexity: {e}. Proceeding with cache write attempt.")
-                # should_skip_due_to_thresholds remains False, so it proceeds to cache
+        # Check multiplier threshold if estimation was successful, threshold is set, and not already skipped
+        if not should_skip_due_to_thresholds and multiplier is not None and \
+           dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0:
+            if multiplier < dbfs_cache_multiplier_threshold:
+                log.info(f"Multiplier {multiplier:.2f}x < explicit threshold {dbfs_cache_multiplier_threshold:.2f}x. Skipping DBFS cache.")
+                should_skip_due_to_thresholds = True
 
         if should_skip_due_to_thresholds:
-            return self
+            # If skipping due to thresholds, decide whether to Spark cache or return self
+            if should_prefer_spark_cache():
+                 log.info("Skipping DBFS cache due to threshold, but preferring Spark cache. Caching in Spark memory.")
+                 cached_df = self.cache()
+                 import weakref
+                 # Store the weakref AND the original complexity tuple (if available)
+                 # Ensure all elements of the tuple are floats or None before assignment
+                 if compute_complexity is not None and multiplier is not None and total_size_gb is not None:
+                     original_complexity_tuple = (compute_complexity, multiplier, total_size_gb)
+                 _spark_cached_dfs_registry[id(cached_df)] = (weakref.ref(cached_df), original_complexity_tuple)
+                 log.info(f"Added DataFrame (id: {id(cached_df)}) with complexity {original_complexity_tuple} to ordered Spark cache registry after skipping DBFS due to threshold.")
+                 return cached_df
+            else:
+                 log.info("Skipping DBFS cache due to threshold and not preferring Spark cache. Returning original DataFrame.")
+                 return self
 
-    # Check if we should prefer Spark caching
+    # --- Caching Decision ---
+    # Check if we should prefer Spark caching (and haven't already returned due to thresholds)
     if should_prefer_spark_cache():
-        log.info("Preferring Spark cache. Caching DataFrame in memory.")
+        log.info("Preferring Spark cache, using df.cache()")
         if replace:
             log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
         # Cache the DataFrame in Spark memory
         cached_df = self.cache()
         # Add to registry for potential backup to DBFS later
-        _spark_cached_dfs_registry.add(cached_df)
+        # Use id(cached_df) as key and (weakref.ref(cached_df), original_complexity_tuple) as value
+        import weakref # Ensure weakref is imported if not already at module level
+        # Ensure all elements of the tuple are floats or None before assignment
+        if compute_complexity is not None and multiplier is not None and total_size_gb is not None:
+            original_complexity_tuple = (compute_complexity, multiplier, total_size_gb)
+        _spark_cached_dfs_registry[id(cached_df)] = (weakref.ref(cached_df), original_complexity_tuple)
+        log.info(f"Added DataFrame (id: {id(cached_df)}) with complexity {original_complexity_tuple} to ordered Spark cache registry.")
         return cached_df
 
     log.info("Writing to DBFS cache.")
@@ -144,6 +167,7 @@ def clearSparkCachedRegistry() -> None:
     Clear the global registry of Spark cached DataFrames.
     """
     _spark_cached_dfs_registry.clear()
+    log.info("Cleared the ordered Spark cache registry.")
 
 
 def clearDbfsCache(self: DataFrame) -> None:
@@ -170,14 +194,26 @@ def __withCachedDisplay__(self: DataFrame, *args, **kwargs) -> None:
     display(self)
 
 
-def extend_dataframe_methods(*args, **kwargs) -> None: # Allow args/kwargs
+def extend_dataframe_methods(spark_session: SparkSession) -> None:
     """
-    Attach extension methods to the DataFrame class.
+    Attach extension methods to the DataFrame class and SparkSession.
     """
     DataFrame.cacheToDbfs = cacheToDbfs  # type: ignore[attr-defined]
     # DataFrame.backupSparkCachedToDbfs is no longer attached as it's removed
     DataFrame.clearDbfsCache = clearDbfsCache  # type: ignore[attr-defined]
     DataFrame.withCachedDisplay = __withCachedDisplay__  # type: ignore[attr-defined]
+    DataFrame.wcd = __withCachedDisplay__  # type: ignore[attr-defined]
+
+    # Attach createCachedDataFrame to the SparkSession instance
+    # The method expects spark_session as its first argument, so we bind it here.
+    # However, the original createCachedDataFrame in core_caching.py already takes spark_session as its first argument.
+    # So, we can directly assign it.
+    # setattr(spark_session, "createCachedDataFrame", createCachedDataFrame)
+
+    # Use functools.partial to ensure the spark_session instance is passed as the first argument
+    # to the core_caching.createCachedDataFrame function.
+    bound_create_cached_df = partial(createCachedDataFrame, spark_session)
+    setattr(spark_session, "createCachedDataFrame", bound_create_cached_df)
 
 
 # Optionally, attach clearSparkCachedRegistry to SparkSession or globally

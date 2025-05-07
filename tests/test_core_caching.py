@@ -164,11 +164,16 @@ def test_write_dbfs_cache_with_existing_identical_cache(mock_spark_in_core_cachi
     assert result is mock_returned_df
 
 # Test from test_dbfs_spark_cache.py
+from unittest.mock import patch # Ensure MagicMock is imported if not already
+# ... other imports ...
+
+@patch('dbfs_spark_cache.core_caching.get_query_plan') # Add patch for get_query_plan
 @patch('dbfs_spark_cache.core_caching.log')
 @patch('dbfs_spark_cache.core_caching.datetime')
-def test_get_input_dir_mod_datetime_handles_schema_change(mock_core_datetime, mock_core_log, mock_dataframe):
+def test_get_input_dir_mod_datetime_handles_schema_change(mock_core_datetime, mock_core_log, mock_get_query_plan, mock_dataframe):
     # mock_dataframe is from fixture, ensure it has a sparkSession
     # Assign a mock spark session to the dataframe
+    mock_get_query_plan.return_value = "dummy_plan_for_test" # Prevent get_query_plan from logging warnings
     mock_dataframe.sparkSession = MagicMock(spec=SparkSession)
 
     # Create a standard exception with the Delta schema change error message
@@ -187,6 +192,7 @@ def test_get_input_dir_mod_datetime_handles_schema_change(mock_core_datetime, mo
 
     result = core_caching.get_input_dir_mod_datetime(mock_dataframe)
 
+    mock_get_query_plan.assert_called_once_with(mock_dataframe) # Verify get_query_plan was called
     mock_dataframe.inputFiles.assert_called_once()
     assert result == expected_result, "Expected dict with placeholder and current time on schema change error"
     mock_core_log.warning.assert_called_once()

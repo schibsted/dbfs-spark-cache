@@ -8,13 +8,14 @@ from dbfs_spark_cache import caching
 from dbfs_spark_cache.hashing import _hash_input_data # Import for tests
 from dbfs_spark_cache.caching import extend_dataframe_methods # For DataFrame extensions
 
-# Ensure DataFrame methods are extended for all tests that might use them implicitly or explicitly
-extend_dataframe_methods()
+# DataFrame methods will be extended within the spark fixture
 
 @pytest.fixture(scope="module")
 def spark():
     # Pyright may not recognize .master, but this is correct for PySpark
-    return SparkSession.builder.master("local[1]").appName("test").getOrCreate() # type: ignore[attr-defined]
+    spark_session = SparkSession.builder.master("local[1]").appName("test").getOrCreate() # type: ignore[attr-defined]
+    extend_dataframe_methods(spark_session)
+    return spark_session
 
 # Hashing tests moved to test_hashing.py
 
