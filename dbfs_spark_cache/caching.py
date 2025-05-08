@@ -46,13 +46,12 @@ def backup_spark_cached_to_dbfs(
 """
 # No longer need local import of DataFrame as it's global now
 
-    # Initialize the list of DataFrames to process with their original complexity values
-    dfs_and_complexities_to_process = []
+    # Initialize the list of DataFrames to process
+    dfs_and_complexities_to_process: list[DataFrame] = []
 
-    # If specific_dfs is provided, we don't have stored complexity.
-    # We'll estimate it during pre-filtering if needed.
-    # Store as list of tuples: (DataFrame, None)
-    dfs_and_complexities_to_process = [(df, None) for df in specific_dfs]
+    # If specific_dfs is provided, prepare the list of DataFrames.
+    # Complexity will be estimated during pre-filtering if needed.
+    dfs_and_complexities_to_process = list(specific_dfs)
     log.info(f"Processing {len(dfs_and_complexities_to_process)} specific DataFrames provided.")
     if process_in_reverse_order:
         dfs_and_complexities_to_process.reverse()
@@ -61,16 +60,16 @@ def backup_spark_cached_to_dbfs(
     initial_df_count = len(dfs_and_complexities_to_process)
     log.info(f"Found {initial_df_count} DataFrames to potentially back up.")
 
-    # Store eligible items as (DataFrame, original_complexity_tuple)
+    # Store eligible items as (DataFrame, Optional[complexity_tuple])
+    # complexity_tuple is (value, multiplier, size_gb)
     eligible_items_for_backup: list[tuple[DataFrame, Optional[tuple[float, float, float]]]] = []
 
     if min_complexity_threshold is not None or min_multiplier_threshold is not None:
         log.info("Filtering DataFrames based on complexity thresholds before backup...")
-        for df_candidate, original_complexity in dfs_and_complexities_to_process:
-            # Type check already done when reading from registry, but needed if specific_dfs was provided
+        for df_candidate in dfs_and_complexities_to_process:
             if not isinstance(df_candidate, DataFrame): # pragma: no cover
-                 log.warning(f"Item '{str(df_candidate)[:100]}...' is not a DataFrame, skipping pre-filter.")
-                 continue
+                log.warning(f"Item '{str(df_candidate)[:100]}...' is not a DataFrame, skipping pre-filter.")
+                continue
 
             current_df_hash_str = "N/A"
             try:
@@ -82,81 +81,83 @@ def backup_spark_cached_to_dbfs(
                 log.warning(f"Could not compute hash for DataFrame '{str(df_candidate)[:100]}...' during pre-filter: {e_hash}. Skipping...")
                 continue
 
-            complexity_to_check = original_complexity
-            source_of_complexity = "stored original"
-
-            # If original complexity wasn't stored (e.g., specific_dfs provided), estimate it now
-            if complexity_to_check is None:
-                try:
-                    complexity_to_check = estimate_compute_complexity(df_candidate)
-                    source_of_complexity = "estimated now"
-                except Exception as e_complexity: # pragma: no cover
-                    log.warning(
-                        f"Could not estimate complexity for DataFrame (hash: {current_df_hash_str}) during pre-filter. Error: {e_complexity}. "
-                        f"Including in backup attempt as complexity check is inconclusive."
-                    )
-                    eligible_items_for_backup.append((df_candidate, None)) # Include if estimation fails
-                    continue
-
-            # Perform checks using complexity_to_check
-            if complexity_to_check is not None:
-                complexity_value, raw_multiplier, total_size_gb = complexity_to_check
+            # Always estimate complexity if thresholds are set
+            try:
+                estimated_complexity_tuple = estimate_compute_complexity(df_candidate)
+                complexity_value, raw_multiplier, total_size_gb = estimated_complexity_tuple
                 log.info(
-                    f"Pre-filter check for DataFrame (hash: {current_df_hash_str}) using {source_of_complexity} complexity: "
+                    f"Estimated complexity for DataFrame (hash: {current_df_hash_str}): "
                     f"Value = {complexity_value:.2f}, Raw Multiplier = {raw_multiplier:.2f}, Input Size GB = {total_size_gb:.2f}"
                 )
 
                 skip = False
                 if min_multiplier_threshold is not None and raw_multiplier < min_multiplier_threshold:
                     log.info(
-                        f"Pre-filter: Skipping DataFrame (hash: {current_df_hash_str}) because its {source_of_complexity} "
+                        f"Pre-filter: Skipping DataFrame (hash: {current_df_hash_str}) because its estimated "
                         f"complexity multiplier ({raw_multiplier:.2f}) is less than the threshold ({min_multiplier_threshold})."
                     )
                     skip = True
 
                 if not skip and min_complexity_threshold is not None and complexity_value <= min_complexity_threshold:
                     log.info(
-                        f"Pre-filter: Skipping DataFrame (hash: {current_df_hash_str}) due to low {source_of_complexity} "
+                        f"Pre-filter: Skipping DataFrame (hash: {current_df_hash_str}) due to low estimated "
                         f"complexity value ({complexity_value:.2f}) not exceeding threshold ({min_complexity_threshold})."
                     )
                     skip = True
 
                 if not skip:
-                    eligible_items_for_backup.append((df_candidate, original_complexity)) # Add if not skipped
+                    eligible_items_for_backup.append((df_candidate, estimated_complexity_tuple)) # Add if not skipped
+                # If skipped, do not add
 
-            else: # Should only happen if original was None and estimation failed
-                 eligible_items_for_backup.append((df_candidate, None))
+            except Exception as e_complexity: # pragma: no cover
+                log.warning(
+                    f"Could not estimate complexity for DataFrame (hash: {current_df_hash_str}) during pre-filter. Error: {e_complexity}. "
+                    f"Including in backup attempt as complexity check is inconclusive."
+                )
+                eligible_items_for_backup.append((df_candidate, None)) # Include if estimation fails, with None for complexity
 
         log.info(f"After complexity filtering, {len(eligible_items_for_backup)} out of {initial_df_count} DataFrames are eligible for backup.")
     else:
         # If no thresholds are set, all are eligible (after type check)
-        for df_candidate, original_complexity in dfs_and_complexities_to_process:
-             if not isinstance(df_candidate, DataFrame): # pragma: no cover
-                 log.warning(f"Item '{str(df_candidate)[:100]}...' is not a DataFrame, skipping.")
-                 continue
-             eligible_items_for_backup.append((df_candidate, original_complexity))
+        for df_candidate in dfs_and_complexities_to_process:
+            if not isinstance(df_candidate, DataFrame): # pragma: no cover
+                log.warning(f"Item '{str(df_candidate)[:100]}...' is not a DataFrame, skipping.")
+                continue
+            eligible_items_for_backup.append((df_candidate, None)) # No complexity calculated here
         log.info(f"No complexity thresholds set. {len(eligible_items_for_backup)} DataFrames (after type check) will be processed.")
 
 
     processed_dfs = [] # Keep track of DataFrames successfully backed up
 
-    # Iterate over eligible items (df, original_complexity_tuple)
-    for df, original_complexity_tuple in tqdm(eligible_items_for_backup, desc="Backing up Spark-cached DataFrames to DBFS", disable=not eligible_items_for_backup, unit="df"):
+    # Iterate over eligible items
+    for df, prefilter_complexity_tuple in tqdm(eligible_items_for_backup, desc="Backing up Spark-cached DataFrames to DBFS", disable=not eligible_items_for_backup, unit="df"):
         current_df_hash_str_loop = "N/A"
         try:
             current_df_hash_str_loop = get_table_hash(df)
         except Exception: # pragma: no cover
             log.warning(f"Could not re-compute hash for DataFrame '{str(df)[:100]}...' inside backup loop. Using 'N/A'.")
 
+        # Log complexity before backup attempt
+        if prefilter_complexity_tuple:
+            complexity_value_loop, raw_multiplier_loop, total_size_gb_loop = prefilter_complexity_tuple
+            log.info(
+                f"Processing DataFrame (hash: {current_df_hash_str_loop}) for backup. Pre-filtered complexity: "
+                f"Value = {complexity_value_loop:.2f}, Raw Multiplier = {raw_multiplier_loop:.2f}, Input Size GB = {total_size_gb_loop:.2f}"
+            )
+        else: # Complexity not available from pre-filter (e.g. no thresholds, or pre-filter estimation failed)
+            try:
+                complexity_value_loop, raw_multiplier_loop, total_size_gb_loop = estimate_compute_complexity(df)
+                log.info(
+                    f"Processing DataFrame (hash: {current_df_hash_str_loop}) for backup. Estimated complexity (in-loop): "
+                    f"Value = {complexity_value_loop:.2f}, Raw Multiplier = {raw_multiplier_loop:.2f}, Input Size GB = {total_size_gb_loop:.2f}"
+                )
+            except Exception as e_loop_complexity: # pragma: no cover
+                log.warning(
+                    f"Could not estimate complexity for DataFrame (hash: {current_df_hash_str_loop}) in backup loop. Error: {e_loop_complexity}. "
+                    f"Proceeding with backup attempt."
+                )
         # Backup logic
         try:
-            # Log the ORIGINAL complexity details just before attempting to write
-            if original_complexity_tuple:
-                 log.info(
-                     f"Original complexity for DataFrame (hash: {current_df_hash_str_loop}) being written: "
-                     f"Value = {original_complexity_tuple[0]:.2f}, Raw Multiplier = {original_complexity_tuple[1]:.2f}, Input Size GB = {original_complexity_tuple[2]:.2f}"
-                 )
-
             log.info(
                 f"Attempting to back up Spark-cached DataFrame (hash: {current_df_hash_str_loop}) to DBFS. "
                 f"Spark cache status: useMemory={df.storageLevel.useMemory}, useDisk={df.storageLevel.useDisk}, "
