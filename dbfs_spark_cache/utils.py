@@ -1,16 +1,9 @@
 import logging
-import weakref
 import pandas as pd
-from pyspark.sql import DataFrame # Import DataFrame for type hinting
-from typing import Optional, OrderedDict as TypingOrderedDict, Tuple # Added import
-import collections # For OrderedDict runtime
-
+from typing import Optional
 # Configure module-level logger
 log = logging.getLogger(__name__)
 
-# Global registry for Spark-cached DataFrames, now ordered and storing original complexity
-# Structure: { df_id: (weakref.ref(df), Optional[Tuple[complexity_value, multiplier, size_gb]]) }
-_spark_cached_dfs_registry: 'TypingOrderedDict[int, Tuple[weakref.ref[DataFrame], Optional[Tuple[float, float, float]]]]' = collections.OrderedDict()
 
 def empty_cached_table():
     """Returns an empty Pandas DataFrame with standard cache table columns."""

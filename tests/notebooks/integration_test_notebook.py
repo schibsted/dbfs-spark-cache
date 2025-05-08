@@ -126,14 +126,11 @@ from dbfs_spark_cache.core_caching import (
     write_dbfs_cache,
 )
 
-# Separate import for clearSparkCachedRegistry
 # Import the dbfs-spark-cache module and its inner functions
 from dbfs_spark_cache.dataframe_extensions import (
     __withCachedDisplay__,
-    _spark_cached_dfs_registry,
     cacheToDbfs,
     clearDbfsCache,
-    clearSparkCachedRegistry,
     should_prefer_spark_cache,
 )
 from dbfs_spark_cache.hashing import _hash_input_data
@@ -563,64 +560,22 @@ if not is_serverless_cluster():
     df_classic_prefer_true = df_sql.select("name", "age") # Create a new DF for this test
     hash_classic_prefer_true = get_table_hash(df_classic_prefer_true)
     clear_cache_for_hash(hash_classic_prefer_true) # Ensure no DBFS cache
-    clearSparkCachedRegistry()
-    assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty"
 
     print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=True, no existing DBFS cache...")
     df_cached_classic_spark = cacheToDbfs(df_classic_prefer_true)
 
     assert df_cached_classic_spark.is_cached, "DataFrame should be Spark-cached"
-    assert id(df_cached_classic_spark) in _spark_cached_dfs_registry, "DataFrame ID should be in registry keys"
+    # assert id(df_cached_classic_spark) in _spark_cached_dfs_registry, "DataFrame ID should be in registry keys" # Registry is being removed
     table_name_classic_spark = get_table_name_from_hash(hash_classic_prefer_true)
     assert not spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} should NOT exist yet"
     print(f"DataFrame was Spark-cached and added to registry. DBFS table {table_name_classic_spark} does not exist yet.")
 
     # Now, test backup
     print("\\nTesting backup_spark_cached_to_dbfs...")
-    backup_spark_cached_to_dbfs(min_complexity_threshold=None, min_multiplier_threshold=None) # Use registry
+    backup_spark_cached_to_dbfs(specific_dfs=[df_cached_classic_spark], min_complexity_threshold=None, min_multiplier_threshold=None)
     assert spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} SHOULD exist after backup"
-# --- Test that the correct complexity tuple is logged during backup ---
 
-import io
-
-def test_backup_logs_original_complexity():
-    import logging
-    from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
-    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs, _spark_cached_dfs_registry
-
-    # Create a DataFrame and cache it to Spark (so it gets a complexity tuple in the registry)
-    df = df_sql.select("name", "age", "salary")
-    # This will log and store the complexity tuple in the registry
-    df_cached = cacheToDbfs(df)
-    df_id = id(df_cached)
-    # Get the original complexity tuple from the registry
-    original_tuple = _spark_cached_dfs_registry[df_id][1]
-
-    # Set up log capture
-    log_capture = io.StringIO()
-    handler = logging.StreamHandler(log_capture)
-    handler.setLevel(logging.INFO)
-    log = logging.getLogger("dbfs_spark_cache.caching")
-    log.addHandler(handler)
-    log.setLevel(logging.INFO)
-
-    # Run backup (should log the original complexity tuple)
-    backup_spark_cached_to_dbfs(min_complexity_threshold=None, min_multiplier_threshold=None)
-
-    log.removeHandler(handler)
-    log_contents = log_capture.getvalue()
-    log_capture.close()
-
-    # Check that the original complexity tuple is in the logs
-    assert original_tuple is not None, "Original complexity tuple should not be None"
-    expected_log = "Original complexity for DataFrame (hash:"
-    assert expected_log in log_contents, f"Expected log line with original complexity not found. Log: {log_contents}"
-    # Check that the actual values are present
-    for val in original_tuple:
-        assert f"{val:.2f}" in log_contents, f"Expected value {val:.2f} in log. Log: {log_contents}"
-
-test_backup_logs_original_complexity()
-print("Test for logging of original complexity tuple during backup passed.")
+# print("Test for logging of original complexity tuple during backup passed.") # Commented out as test is removed
 print(f"DBFS table {table_name_classic_spark} exists after backup.")
 clear_cache_for_hash(hash_classic_prefer_true) # Clean up
 
@@ -633,13 +588,12 @@ assert should_prefer_spark_cache() is False, "should_prefer_spark_cache should b
 df_classic_prefer_false = df_sql.select("name", "salary")
 hash_classic_prefer_false = get_table_hash(df_classic_prefer_false)
 clear_cache_for_hash(hash_classic_prefer_false)
-clearSparkCachedRegistry()
 
 print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=False...")
 df_cached_classic_dbfs = cacheToDbfs(df_classic_prefer_false, dbfs_cache_complexity_threshold=0) # Force DBFS cache
 
 assert not df_cached_classic_dbfs.is_cached, "DataFrame should NOT be Spark-cached by default if going to DBFS"
-assert id(df_cached_classic_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys"
+# assert id(df_cached_classic_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys" # Registry is being removed
 table_name_classic_dbfs = get_table_name_from_hash(hash_classic_prefer_false)
 assert spark.catalog.tableExists(table_name_classic_dbfs), f"DBFS table {table_name_classic_dbfs} SHOULD exist"
 print(f"DataFrame was cached to DBFS. DBFS table {table_name_classic_dbfs} exists.")
@@ -650,13 +604,12 @@ if is_serverless_cluster():
     df_serverless_prefer_true = df_sql.select("age", "salary")
     hash_serverless_prefer_true = get_table_hash(df_serverless_prefer_true)
     clear_cache_for_hash(hash_serverless_prefer_true)
-    clearSparkCachedRegistry()
 
     print("Calling cacheToDbfs on serverless, PREFER_SPARK_CACHE=True (should use standard DBFS logic)...")
     df_cached_serverless_dbfs = cacheToDbfs(df_serverless_prefer_true, dbfs_cache_complexity_threshold=0) # Force DBFS cache
 
     assert not df_cached_serverless_dbfs.is_cached, "DataFrame should NOT be Spark-cached by default if going to DBFS on serverless"
-    assert id(df_cached_serverless_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys on serverless"
+    # assert id(df_cached_serverless_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys on serverless" # Registry is being removed
     table_name_serverless_dbfs = get_table_name_from_hash(hash_serverless_prefer_true)
     assert spark.catalog.tableExists(table_name_serverless_dbfs), f"DBFS table {table_name_serverless_dbfs} SHOULD exist on serverless"
     print(f"DataFrame was cached to DBFS on serverless. DBFS table {table_name_serverless_dbfs} exists.")
@@ -685,16 +638,15 @@ print(f"Setting PREFER_SPARK_CACHE={app_config.PREFER_SPARK_CACHE} for chained t
 # Create a new DataFrame for this test
 df_chained_spark_orig = df_sql.select("name", "salary")
 hash_chained_spark_orig = get_table_hash(df_chained_spark_orig)
+hash_chained_spark_orig = get_table_hash(df_chained_spark_orig)
 clear_cache_for_hash(hash_chained_spark_orig) # Ensure no DBFS cache
-clearSparkCachedRegistry()
-assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty before chained test"
 
 # First cacheToDbfs call
 print("Calling first cacheToDbfs in chain...")
 df_chained_spark_cached_1 = cacheToDbfs(df_chained_spark_orig)
 
 assert df_chained_spark_cached_1.is_cached, "First DataFrame in chain should be Spark-cached"
-assert id(df_chained_spark_cached_1) in _spark_cached_dfs_registry, "First DataFrame ID should be in registry keys"
+# assert id(df_chained_spark_cached_1) in _spark_cached_dfs_registry, "First DataFrame ID should be in registry keys" # Registry is being removed
 
 # Apply a transformation and call cacheToDbfs again
 print("\nApplying transformation and calling second cacheToDbfs in chain...")
@@ -702,21 +654,14 @@ df_chained_spark_transformed = df_chained_spark_cached_1.filter(col("salary") > 
 df_chained_spark_cached_2 = cacheToDbfs(df_chained_spark_transformed)
 
 assert df_chained_spark_cached_2.is_cached, "Second DataFrame in chain should be Spark-cached"
-assert id(df_chained_spark_cached_2) in _spark_cached_dfs_registry, "Second DataFrame ID should be in registry keys"
+# assert id(df_chained_spark_cached_2) in _spark_cached_dfs_registry, "Second DataFrame ID should be in registry keys" # Registry is being removed
 print("Second DataFrame in chain was Spark-cached and added to registry.")
-
-# Verify that the first cached DF is still in the registry (optional, but good for robustness)
-assert id(df_chained_spark_cached_1) in _spark_cached_dfs_registry, "First DataFrame ID should remain in registry keys after second cache call"
-print("Both DataFrames remain in registry.")
 
 # Clean up caches created during this test
 clear_cache_for_hash(get_table_hash(df_chained_spark_cached_1))
 clear_cache_for_hash(get_table_hash(df_chained_spark_cached_2))
-clearSparkCachedRegistry()
-assert len(_spark_cached_dfs_registry) == 0, "Registry should be empty after chained test cleanup"
 
 # Restore original config
-app_config.PREFER_SPARK_CACHE = False
 print(f"Restored PREFER_SPARK_CACHE to {app_config.PREFER_SPARK_CACHE}")
 
 print("\\n--- Chained cacheToDbfs with PREFER_SPARK_CACHE=True test completed ---")

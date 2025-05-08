@@ -84,21 +84,13 @@ Because spark cache is faster than dbfs cache when used with clusers with enough
 - **Full test coverage**: All new logic is covered by unit and integration tests.
 
 By default (on classic clusters), calling `.cacheToDbfs()` will:
-- Use Spark's in-memory cache (`.cache()`) if no DBFS cache exists, and register the DataFrame for backup.
-- If a DBFS cache exists, it will be read as before.
+- Use Spark's in-memory cache (`.cache()`) if no DBFS cache exists. `.wcd()` will cache with Spark or not based on the estimated compute complexity of the query.
+- If a DBFS cache exists, it will be read instead.
 - You can persist all Spark-cached DataFrames to DBFS at any time (e.g. before cluster shutdown) with:
 
 ```python
 from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
-backup_spark_cached_to_dbfs() # backs up all DataFrames cached with .cacheToDbfs() over some threshold criterion (default: min_multiplier_threshold > 3), likley less practical, or:
-backup_spark_cached_to_dbfs(specific_dfs=[my_last_end_of_work_df]) # backs up one or more specific DataFrames, eg the final result of your work, where you can pick up later
-```
-
-You can also clear the registry of tracked Spark-cached DataFrames with:
-
-```python
-from dbfs_spark_cache.caching import clear_spark_cached_registry
-clear_spark_cached_registry()
+backup_spark_cached_to_dbfs(specific_dfs=[my_df_used_with_wcd, my_last_end_of_work_df]) # backs up one or more specific DataFrames, eg the final result of your work and the DataFrames used with withCachedDisplay(), so you can pick up faster next time
 ```
 
 To force always caching to DBFS set:

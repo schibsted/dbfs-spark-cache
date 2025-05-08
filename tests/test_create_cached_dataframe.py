@@ -174,13 +174,11 @@ def test_cacheToDbfs_bypass_for_data_cache(spark, tmp_path):
 
         # Patching for should_prefer_spark_cache logic (now in utils and config)
         # and get_input_dir_mod_datetime (now in core_caching)
-        # Also patch _spark_cached_dfs_registry as they are used by the new bypass logic
         with patch("dbfs_spark_cache.utils.is_serverless_cluster", return_value=False), \
              patch.object(app_config, "PREFER_SPARK_CACHE", False), \
              patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={"<direct_data_cache>": True}) as mock_get_input_dir_mod_datetime, \
-             patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry"), \
              patch("dbfs_spark_cache.dataframe_extensions.log"): # Keep log patch in case other parts of the call chain log
-
+            # Call the method on the configured mock DataFrame
             # Call as an instance method. This will call instance_mock_df.cacheToDbfs()
             # which we configured to return instance_mock_df (which is df_for_cache_to_dbfs)
             result = df_for_cache_to_dbfs.cacheToDbfs()

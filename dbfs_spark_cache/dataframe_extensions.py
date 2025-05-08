@@ -14,7 +14,7 @@ from .core_caching import (
     read_dbfs_cache_if_exist,
     write_dbfs_cache,
 )
-from .utils import _spark_cached_dfs_registry, is_serverless_cluster
+from .utils import is_serverless_cluster
 
 # from .query_complexity_estimation import estimate_compute_complexity # Remove module-level import
 log = logging.getLogger(__name__)
@@ -109,21 +109,10 @@ def cacheToDbfs(
                 should_skip_due_to_thresholds = True
 
         if should_skip_due_to_thresholds:
-            # If skipping due to thresholds, decide whether to Spark cache or return self
-            if should_prefer_spark_cache():
-                 log.info("Skipping DBFS cache due to threshold, but preferring Spark cache. Caching in Spark memory.")
-                 cached_df = self.cache()
-                 import weakref
-                 # Store the weakref AND the original complexity tuple (if available)
-                 # Ensure all elements of the tuple are floats or None before assignment
-                 if compute_complexity is not None and multiplier is not None and total_size_gb is not None:
-                     original_complexity_tuple = (compute_complexity, multiplier, total_size_gb)
-                 _spark_cached_dfs_registry[id(cached_df)] = (weakref.ref(cached_df), original_complexity_tuple)
-                 log.info(f"Added DataFrame (id: {id(cached_df)}) with complexity {original_complexity_tuple} to ordered Spark cache registry after skipping DBFS due to threshold.")
-                 return cached_df
-            else:
-                 log.info("Skipping DBFS cache due to threshold and not preferring Spark cache. Returning original DataFrame.")
-                 return self
+            # If skipping due to thresholds, return the original DataFrame without caching.
+            log.info("Skipping DBFS cache due to threshold. Returning original DataFrame without caching.")
+            return self
+            # Removed the check for should_prefer_spark_cache() here, as skipping due to threshold means no caching at all.
 
     # --- Caching Decision ---
     # Check if we should prefer Spark caching (and haven't already returned due to thresholds)
@@ -131,20 +120,11 @@ def cacheToDbfs(
         log.info("Preferring Spark cache, using df.cache()")
         if replace:
             log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
-        # Cache the DataFrame in Spark memory
+        # Cache the DataFrame in Spark's memory or disk storage
         cached_df = self.cache()
-        # Add to registry for potential backup to DBFS later
-        # Use id(cached_df) as key and (weakref.ref(cached_df), original_complexity_tuple) as value
-        import weakref # Ensure weakref is imported if not already at module level
-        # Ensure all elements of the tuple are floats or None before assignment
-        if compute_complexity is not None and multiplier is not None and total_size_gb is not None:
-            original_complexity_tuple = (compute_complexity, multiplier, total_size_gb)
-        _spark_cached_dfs_registry[id(cached_df)] = (weakref.ref(cached_df), original_complexity_tuple)
-        log.info(f"Added DataFrame (id: {id(cached_df)}) with complexity {original_complexity_tuple} to ordered Spark cache registry.")
         return cached_df
 
     log.info("Writing to DBFS cache.")
-    # write_dbfs_cache expects Dict[str, datetime]
     # Explicitly name all args for write_dbfs_cache to satisfy Pyright, even if some are defaults from the signature
     written_df = write_dbfs_cache(
         df=self,
@@ -154,21 +134,7 @@ def cacheToDbfs(
         cache_path=kwargs.get("cache_path", config.SPARK_CACHE_DIR), # Pass through or use default
         verbose=verbose
     )
-    # Do not add to _spark_cached_dfs_registry here if we are writing to DBFS,
-    # unless should_prefer_spark_cache() was true and it was added above.
-    # The registry is for Spark in-memory cached DFs.
     return written_df
-
-
-# backupSparkCachedToDbfs method is removed as its logic is now in caching.py
-
-def clearSparkCachedRegistry() -> None:
-    """
-    Clear the global registry of Spark cached DataFrames.
-    """
-    _spark_cached_dfs_registry.clear()
-    log.info("Cleared the ordered Spark cache registry.")
-
 
 def clearDbfsCache(self: DataFrame) -> None:
     """
@@ -214,7 +180,3 @@ def extend_dataframe_methods(spark_session: SparkSession) -> None:
     # to the core_caching.createCachedDataFrame function.
     bound_create_cached_df = partial(createCachedDataFrame, spark_session)
     setattr(spark_session, "createCachedDataFrame", bound_create_cached_df)
-
-
-# Optionally, attach clearSparkCachedRegistry to SparkSession or globally
-# This can be done in caching.py or here if needed

@@ -12,6 +12,7 @@ class TestGetTableHash(unittest.TestCase):
     def test_get_table_hash_with_existing_hash(self, mock_get_hash_from_metadata, mock_get_query_plan, mock_get_input_dir_mod_datetime):
         # Arrange
         mock_df = MagicMock()
+        mock_df._is_direct_data_cache = False # Ensure it doesn't take the direct data cache path
         from datetime import datetime
         mock_get_input_dir_mod_datetime.return_value = {"some_path": datetime(2025, 4, 22, 10, 0, 0)}
         mock_get_query_plan.return_value = "SELECT * FROM table"
@@ -35,6 +36,7 @@ class TestGetTableHash(unittest.TestCase):
     def test_get_table_hash_without_existing_hash(self, mock_get_hash_from_metadata, mock_get_query_plan, mock_get_input_dir_mod_datetime):
         # Arrange
         mock_df = MagicMock()
+        mock_df._is_direct_data_cache = False # Ensure it doesn't take the direct data cache path
         from datetime import datetime
         mock_get_input_dir_mod_datetime.return_value = {"some_path": datetime(2025, 4, 22, 10, 0, 0)}
         mock_get_query_plan.return_value = "SELECT * FROM table"

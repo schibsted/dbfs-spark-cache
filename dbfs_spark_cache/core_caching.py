@@ -17,7 +17,6 @@ from pyspark.sql import DataFrame, SparkSession
 from .config import config
 from .utils import get_table_name_from_hash, get_hash_from_metadata # Import from utils
 from .hashing import _find_catalog_table_pattern_in_text, _hash_input_data # Import from hashing
-# is_serverless_cluster is used by should_prefer_spark_cache, which is in dataframe_extensions.py
 
 # Configure module-level logger
 log = logging.getLogger(__name__)

@@ -7,40 +7,36 @@ from pyspark.sql import SparkSession, DataFrame # DataFrame moved here for globa
 
 from .dataframe_extensions import (  # Import from dataframe_extensions
     __withCachedDisplay__,
-    # backupSparkCachedToDbfs, # Removed as it's no longer an extension method
     cacheToDbfs,
     clearDbfsCache,
-    clearSparkCachedRegistry,
     extend_dataframe_methods,
 )
 from .utils import (  # Import from utils
-    _spark_cached_dfs_registry,
     get_hash_from_metadata,
     is_serverless_cluster,
 )
 
 
 def backup_spark_cached_to_dbfs(
-    specific_dfs: Optional[Iterable["DataFrame"]] = None,
+    specific_dfs: Iterable["DataFrame"],
     unpersist_after_backup: bool = False,
     min_complexity_threshold: Optional[float] = None,
-    min_multiplier_threshold: Optional[float] = 3.0,
+    min_multiplier_threshold: Optional[float] = None,
     process_in_reverse_order: bool = True,
 ):
     """
-    Backup all Spark-cached DataFrames to DBFS, or a specific list if provided.
+    Backup a specific list of Spark-cached DataFrames to DBFS.
     Uses tqdm for progress tracking and allows filtering by compute complexity.
 
     Parameters:
-    specific_dfs: Optional[Iterable[DataFrame]] = None
-        An optional iterable of DataFrames to back up. If None, all DataFrames
-        in the internal `_spark_cached_dfs_registry` are processed.
+    specific_dfs: Iterable[DataFrame]
+        An iterable of DataFrames to back up.
     unpersist_after_backup: bool = False
         If True, unpersists the DataFrame from Spark's cache after successful backup.
     min_complexity_threshold: Optional[float] = None
         If set, only DataFrames whose estimated compute complexity value
         exceeds this threshold will be backed up.
-    min_multiplier_threshold: Optional[float] = 3.0
+    min_multiplier_threshold: Optional[float] = None
         If set, only DataFrames whose original estimated complexity *multiplier*
         is greater than or equal to this threshold will be backed up.
         This can be used to skip backing up DataFrames with very simple query plans.
@@ -53,22 +49,11 @@ def backup_spark_cached_to_dbfs(
     # Initialize the list of DataFrames to process with their original complexity values
     dfs_and_complexities_to_process = []
 
-    if specific_dfs is None:
-        # Iterate over a copy of the registry if processing all
-        # For OrderedDict, iterate over values (tuples of weakref, complexity) and dereference
-        for df_id, (weak_df_ref, original_complexity_tuple) in _spark_cached_dfs_registry.items():
-            df_ref = weak_df_ref() # Dereference the weakref
-            if df_ref is not None:
-                dfs_and_complexities_to_process.append((df_ref, original_complexity_tuple))
-            else: # pragma: no cover
-                log.warning(f"DataFrame with id {df_id} has been garbage collected before backup processing.")
-        log.info(f"Retrieved {len(dfs_and_complexities_to_process)} DataFrames (with original complexity) from the ordered registry.")
-    else:
-        # If specific_dfs is provided, we don't have stored complexity.
-        # We'll estimate it during pre-filtering if needed.
-        # Store as list of tuples: (DataFrame, None)
-        dfs_and_complexities_to_process = [(df, None) for df in specific_dfs]
-        log.info(f"Processing {len(dfs_and_complexities_to_process)} specific DataFrames provided.")
+    # If specific_dfs is provided, we don't have stored complexity.
+    # We'll estimate it during pre-filtering if needed.
+    # Store as list of tuples: (DataFrame, None)
+    dfs_and_complexities_to_process = [(df, None) for df in specific_dfs]
+    log.info(f"Processing {len(dfs_and_complexities_to_process)} specific DataFrames provided.")
     if process_in_reverse_order:
         dfs_and_complexities_to_process.reverse()
         log.info("Processing DataFrames in reverse order.")
@@ -190,28 +175,6 @@ def backup_spark_cached_to_dbfs(
         except Exception as e_backup:
             log.error(f"Error during DBFS backup for DataFrame (hash: {current_df_hash_str_loop}): {e_backup}", exc_info=True)
 
-    # Now, remove all successfully processed DataFrames from the global registry
-    if specific_dfs is None and processed_dfs:
-        log.info(f"Removing {len(processed_dfs)} successfully backed-up DataFrames from Spark cache registry.")
-        for df_processed in processed_dfs:
-            df_processed_hash_str = "N/A"
-            if isinstance(df_processed, DataFrame):
-                try:
-                    df_processed_hash_str = get_table_hash(df_processed)
-                except Exception: # pragma: no cover
-                    pass # Keep N/A if hash fails for logging
-
-            try:
-                # Use pop with id(df_processed) as key for OrderedDict
-                # The None argument to pop ensures no KeyError if already removed
-                if _spark_cached_dfs_registry.pop(id(df_processed), None) is not None:
-                    log.info(f"Removed successfully backed-up DataFrame (id: {id(df_processed)}, hash: {df_processed_hash_str}) from ordered Spark cache registry.")
-                else: # pragma: no cover
-                    log.warning(f"Attempted to remove DataFrame (id: {id(df_processed)}, hash: {df_processed_hash_str}) from ordered registry, but it was not found (already removed or never added).")
-            except TypeError as e: # Should not happen if df_processed is a DataFrame
-                 log.error(f"TypeError while trying to get id for DataFrame (hash: {df_processed_hash_str}) for removal: {e}")
-
-
 from .cache_management import (  # Import from cache_management
     clear_cache_for_hash,
     clear_caches_older_than,
@@ -281,12 +244,10 @@ __all__ = [
     "get_table_cache_info",
     "get_input_dir_mod_datetime", # Re-export
     "DF_DBFS_CACHE_QUEUE", # Re-export
-    "_spark_cached_dfs_registry", # Re-export
     "should_prefer_spark_cache", # Re-exported re-implementation
     "estimate_compute_complexity", # Re-export
     # Re-export DataFrame extension methods and related functions
     "cacheToDbfs",
-    "clearSparkCachedRegistry",
     "clearDbfsCache",
     "__withCachedDisplay__",
     "extend_dataframe_methods",
