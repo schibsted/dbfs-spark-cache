@@ -315,10 +315,10 @@ def get_query_plan(df: DataFrame) -> str:
         cleaned_plan = re.sub(r"#\d+", "", plan_str_val)
         cleaned_plan = re.sub(r"\s+", " ", cleaned_plan).strip()
 
+        if "UDF" in plan_str_val:
+            log.warning("UDF detected in query plan, cache invalidation for UDF code not implemented!")
         if "Photon does not fully support" in plan_str_val:
             log.info(f"Photon limitations might affect caching:\n{plan_str_val.split('Photon does not fully support the query because:')[1]}")
-        if "udf" in plan_str_val:
-            log.warning(f"UDF detected in query plan, cache invalidation for UDF code not implemented:\n{plan_str_val.split('Photon does not fully support the query because:')[1]}")
         return cleaned_plan
     except Exception as e:
         log.error(f"Error getting query plan using explain(extended): {e}")

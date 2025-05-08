@@ -159,6 +159,7 @@ clear_caches_older_than(num_days=0, specific_database=config.CACHE_DATABASE, con
 print(f"All caches cleared from {config.CACHE_DATABASE}.")
 
 # COMMAND ----------
+
 import logging
 
 # Get the library's logger
@@ -253,14 +254,22 @@ print(f"Query plan for transformed DataFrame (truncated): {plan_transformed[:200
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType
 
-
 @udf(returnType=IntegerType())
 def add_ten(x):
     return x + 10
 
 df_udf = df_simple.withColumn("age_plus_ten", add_ten(col("age")))
+# Check warning
+df_udf.cacheToDbfs()
+
 plan_udf = get_query_plan(df_udf)
 print(f"Query plan for UDF DataFrame (truncated): {plan_udf[:200]}...\n")
+
+@udf(returnType=IntegerType())
+def add_ten(x):
+    return x + 11
+
+print(f'Hashes different: {get_table_hash(df_udf) != get_table_hash(df_simple.withColumn("age_plus_ten", add_ten(col("age"))))}')
 
 print("\nTesting get_cache_metadata...")
 input_dirs_raw = get_input_dir_mod_datetime(df_simple)
@@ -1156,11 +1165,6 @@ print(f"Inconsistent cache entries cleared from {config.CACHE_DATABASE}.\n")
 # Drop the general 'test_db' (used for source data, not the cache DB itself)
 spark.sql("DROP DATABASE IF EXISTS test_db CASCADE")
 print("General test_db (for source data) dropped\n")
-
-# Restore the original cache database setting in config if needed for any subsequent notebook cells (though this is the end)
-if 'original_cache_database' in locals() and original_cache_database:
-    config.CACHE_DATABASE = original_cache_database
-    print(f"Restored config.CACHE_DATABASE to: {config.CACHE_DATABASE}")
 
 print("Cleanup completed.")
 
