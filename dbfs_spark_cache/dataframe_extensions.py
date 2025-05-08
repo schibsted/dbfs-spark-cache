@@ -141,7 +141,7 @@ def clearDbfsCache(self: DataFrame) -> None:
     clear_cache_for_hash(table_hash)
 
 
-def __withCachedDisplay__(self: DataFrame, *args, **kwargs) -> None:
+def __withCachedDisplay__(self: DataFrame, *args, **kwargs) -> DataFrame:
     """
     Display the DataFrame with caching.
     """
@@ -153,6 +153,7 @@ def __withCachedDisplay__(self: DataFrame, *args, **kwargs) -> None:
         display = print  # type: ignore[assignment] # fallback to print
 
     display(self)
+    return self
 
 
 def extend_dataframe_methods(spark_session: SparkSession) -> None:

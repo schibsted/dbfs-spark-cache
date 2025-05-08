@@ -156,9 +156,6 @@ def backup_spark_cached_to_dbfs(
                      f"Original complexity for DataFrame (hash: {current_df_hash_str_loop}) being written: "
                      f"Value = {original_complexity_tuple[0]:.2f}, Raw Multiplier = {original_complexity_tuple[1]:.2f}, Input Size GB = {original_complexity_tuple[2]:.2f}"
                  )
-            else:
-                 log.info(f"Original complexity not available for DataFrame (hash: {current_df_hash_str_loop}) being written (likely specific_dfs provided).")
-
 
             log.info(
                 f"Attempting to back up Spark-cached DataFrame (hash: {current_df_hash_str_loop}) to DBFS. "
