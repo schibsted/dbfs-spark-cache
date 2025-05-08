@@ -140,6 +140,25 @@ from dbfs_spark_cache import caching
 extend_dataframe_methods(spark) # Pass spark
 config.DEFAULT_COMPLEXITY_THRESHOLD = 130 # Set default complexity threshold
 
+# COMMAND ----------
+
+# Set to use the test cache database for this integration test run
+original_cache_database = config.CACHE_DATABASE
+config.CACHE_DATABASE = config.CACHE_DATABASE_TEST
+print(f"Integration test will use CACHE_DATABASE: {config.CACHE_DATABASE} (original was: {original_cache_database})")
+
+# Ensure the test database exists
+spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.CACHE_DATABASE}")
+print(f"Ensured database {config.CACHE_DATABASE} exists.")
+
+# Clear any pre-existing caches from the test database before tests run
+print(f"Clearing all caches from {config.CACHE_DATABASE} before tests run...")
+# Pass specific_database for clarity here, even though config.CACHE_DATABASE is already switched.
+# confirm_delete=False is important for non-interactive execution.
+clear_caches_older_than(num_days=0, specific_database=config.CACHE_DATABASE, confirm_delete=False)
+print(f"All caches cleared from {config.CACHE_DATABASE}.")
+
+# COMMAND ----------
 import logging
 
 # Get the library's logger
@@ -288,7 +307,7 @@ assert df_read_miss is None, f"Cache miss expected: {df_different}, {df_read_mis
 
 print("\nTesting read_dbfs_cache_if_exist...")
 clear_cache_for_hash(hash_name)
-write_dbfs_cache(df_simple)
+write_dbfs_cache(df_simple, replace=False)
 df_read = read_dbfs_cache_if_exist(df_simple)
 print(f"Read from cache: {df_read is not None}\n")
 if df_read is not None:
@@ -370,7 +389,6 @@ cache_exists_high = spark.catalog.tableExists(qualified_table_name_high)
 assert not cache_exists_high, f"Cache table {qualified_table_name_high} should NOT exist for high threshold (complexity < 1000)"
 print(f"Cache table {qualified_table_name_high} does not exist as expected: {not cache_exists_high}\n")
 
-print("\nTesting deferred caching...")
 print("\nTesting cache invalidation with data changes...")
 df_to_invalidate = cacheToDbfs(df_sql)
 data_new = [("Alice", 35, 56000.0), ("Bob", 46, 66000.0), ("Charlie", 30, 73000.0), ("Diana", 38, 59000.0)]
@@ -1110,16 +1128,41 @@ print("Combined caching test passed.\n")
 # COMMAND ----------
 
 # 6. Cleanup
-if False: # Beware, only run this if you have nothing to keep in chache database
-  print("\nCleaning up test artifacts...\n")
-  cached_tables = get_cached_tables()
-  display(cached_tables)  # noqa: F821
-  print(f"Number of cached tables to clean: {len(cached_tables)}\n")
-  clear_caches_older_than(num_days=0)
-  print("All caches cleared\n")
-  spark.sql("DROP DATABASE IF EXISTS test_db CASCADE")
-  print("Test database dropped\n")
-  clear_inconsistent_cache()
+# Ensure this cleanup runs. The original cache database name was stored in 'original_cache_database'.
+# The config.CACHE_DATABASE is currently set to the test database name.
+print(f"\nCleaning up test artifacts from test cache database: {config.CACHE_DATABASE}...\n")
+
+# Display tables from the test cache database before clearing
+# Note: get_cached_tables uses the current config.CACHE_DATABASE
+cached_tables_in_test_db = get_cached_tables(num_threads=50) # Use current config.CACHE_DATABASE
+if cached_tables_in_test_db is not None and not cached_tables_in_test_db.empty:
+    print(f"Tables in TEST cache database ({config.CACHE_DATABASE}) before final cleanup:")
+    display(cached_tables_in_test_db) # noqa: F821
+    print(f"Number of cached tables to clean from {config.CACHE_DATABASE}: {len(cached_tables_in_test_db)}\n")
+else:
+    print(f"No cached tables found in TEST cache database ({config.CACHE_DATABASE}) before final cleanup.\n")
+
+# Clear all caches from the TEST cache database
+# Pass specific_database to be explicit, and confirm_delete=False for non-interactive run
+clear_caches_older_than(num_days=0, specific_database=config.CACHE_DATABASE, confirm_delete=False)
+print(f"All caches cleared from {config.CACHE_DATABASE}\n")
+
+# Clear inconsistent cache entries from the TEST cache database
+# clear_inconsistent_cache also uses the global config.CACHE_DATABASE
+print(f"Clearing inconsistent cache entries from {config.CACHE_DATABASE}...")
+clear_inconsistent_cache(num_threads=50) # Uses current config.CACHE_DATABASE
+print(f"Inconsistent cache entries cleared from {config.CACHE_DATABASE}.\n")
+
+# Drop the general 'test_db' (used for source data, not the cache DB itself)
+spark.sql("DROP DATABASE IF EXISTS test_db CASCADE")
+print("General test_db (for source data) dropped\n")
+
+# Restore the original cache database setting in config if needed for any subsequent notebook cells (though this is the end)
+if 'original_cache_database' in locals() and original_cache_database:
+    config.CACHE_DATABASE = original_cache_database
+    print(f"Restored config.CACHE_DATABASE to: {config.CACHE_DATABASE}")
+
+print("Cleanup completed.")
 
 # COMMAND ----------
 

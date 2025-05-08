@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import sys
-import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Mapping
 
@@ -472,7 +471,7 @@ def read_dbfs_cache_if_exist(
 
 
 def write_dbfs_cache(
-    df: DataFrame, replace: bool = False, query_plan: str = "",
+    df: DataFrame, replace: bool = True, query_plan: str = "",
     input_dir_mod_datetime: Optional[Mapping[str, Union[datetime, bool]]] = None,
     hash_name: Optional[str] = None, cache_path: str = config.SPARK_CACHE_DIR,
     verbose: bool = False
@@ -507,11 +506,13 @@ def write_dbfs_cache(
         if spark is None:
             log.error("SparkSession not available, cannot read cache table.")
             return df
-        return spark.read.table(table_name)
+        if replace:
+            return spark.read.table(table_name)
+        else:
+            return df
     except Exception as e:
         log.error(f"Error reading newly created cache table {table_name}: {e}")
         return df
-# return df # Removed stray return statement
 
 
 def is_spark_cached(df: DataFrame) -> bool:

@@ -165,7 +165,7 @@ def backup_spark_cached_to_dbfs(
                 f"Spark cache status: useMemory={df.storageLevel.useMemory}, useDisk={df.storageLevel.useDisk}, "
                 f"is_cached={df.is_cached}"
             )
-            write_dbfs_cache(df)
+            write_dbfs_cache(df, replace=False)
             processed_dfs.append(df)
             log.info(f"Successfully backed up DataFrame (hash: {current_df_hash_str_loop}) to DBFS.")
 

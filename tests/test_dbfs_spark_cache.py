@@ -298,8 +298,8 @@ def test_backup_spark_cached_to_dbfs_explicit_list():
     # during pre-filtering since there's no stored complexity
     assert mock_estimate_complexity.call_count == 2
     assert mock_write_cache.call_count == 2
-    mock_write_cache.assert_any_call(mock_df1)
-    mock_write_cache.assert_any_call(mock_df2)
+    mock_write_cache.assert_any_call(mock_df1, replace=False)
+    mock_write_cache.assert_any_call(mock_df2, replace=False)
 
 
 def test_backup_spark_cached_unpersists_if_flagged():
@@ -331,51 +331,8 @@ def test_backup_spark_cached_unpersists_if_flagged():
         # Verify write was called and unpersist was called
         # estimate_compute_complexity is called once during pre-filter when specific_dfs is used
         assert mock_estimate_complexity.call_count == 1
-        mock_write_cache.assert_called_once_with(mock_df)
+        mock_write_cache.assert_called_once_with(mock_df, replace=False)
         mock_df.unpersist.assert_called_once()
-
-def test_cacheToDbfs_deferred_prefer_spark_cache():
-    """Test deferred cacheToDbfs when preferring Spark cache."""
-    from dbfs_spark_cache import caching
-    from dbfs_spark_cache.config import config as app_config
-    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
-
-    mock_df_input = MagicMock(name="DeferredInputDataFrame")
-    mock_df_input.cache.return_value = mock_df_input
-    mock_df_input.sparkSession = MagicMock()
-
-    # Attach the cacheToDbfs method to the mock DataFrame
-    mock_df_input.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_df_input, **kwargs)
-
-    original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
-    app_config.PREFER_SPARK_CACHE = True
-
-    try:
-        # Instead of patching should_prefer_spark_cache, we'll set up the conditions for it to return True
-        # app_config.PREFER_SPARK_CACHE is already set to True above
-        with patch("dbfs_spark_cache.utils.is_serverless_cluster", return_value=False), \
-             patch("dbfs_spark_cache.core_caching.is_spark_cached", return_value=False), \
-             patch("dbfs_spark_cache.dataframe_extensions.get_query_plan", return_value="SimplePlan"), \
-             patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
-             patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None), \
-             patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(1.0, 2.0, 200.0)):
-             # patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry") as mock_registry:
-        # We need to mock its __setitem__ if we want to assert on additions
-            # For simplicity, we'll assume the add logic in dataframe_extensions works
-            # and focus on the cacheToDbfs behavior.
-
-            result_df = mock_df_input.cacheToDbfs()
-
-            # In our implementation, we don't check is_spark_cached when PREFER_SPARK_CACHE is True
-            # We just directly call df.cache(), so update the test to check that
-            mock_df_input.cache.assert_called_once()
-            # Assert that the registry (mocked OrderedDict) had an item set
-            # The key would be id(mock_df_input), value is (weakref, complexity_tuple)
-            # Complexity tuple was (1.0, 2.0, 200.0) in this test's patch
-            assert result_df is mock_df_input
-    finally:
-        app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache
-
 
 def test_cacheToDbfs_prefer_spark_cache_uses_existing_dbfs_cache():
     """Test cacheToDbfs uses existing DBFS cache even when preferring Spark cache."""
@@ -402,7 +359,6 @@ def test_cacheToDbfs_prefer_spark_cache_uses_existing_dbfs_cache():
              patch("dbfs_spark_cache.core_caching.is_spark_cached") as mock_is_spark_cached, \
              patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache") as mock_write_dbfs:
 
-            # Call as a method - deferred parameter removed
             result_df = mock_df_input.cacheToDbfs()
 
             mock_read_dbfs.assert_called_once()
@@ -446,7 +402,6 @@ def test_cacheToDbfs_standard_logic_on_serverless():
              patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(150, 1.5, 100.0)) as mock_estimate, \
              patch("dbfs_spark_cache.dataframe_extensions.write_dbfs_cache", return_value=mock_df_input) as mock_write_dbfs:
 
-            # Call as a method - deferred parameter removed
             result_df = mock_df_input.cacheToDbfs(dbfs_cache_complexity_threshold=100)
 
             mock_read_dbfs.assert_called_once() # Standard logic still checks read first

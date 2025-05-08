@@ -157,8 +157,20 @@ def get_cached_tables(num_threads=None):
 def clear_caches_older_than(
     num_days: int = 7,
     num_threads: int | None = None,
+    specific_database: str | None = None, # Added specific_database
+    confirm_delete: bool = False # Added confirm_delete
 ):
+    # Use the specific_database if provided, otherwise use the configured default
+    cache_db_to_clear = specific_database or config.CACHE_DATABASE
+    original_config_db = config.CACHE_DATABASE
+
+    if specific_database:
+        config.CACHE_DATABASE = specific_database
+
     df_files = get_cached_tables()
+
+    if specific_database: # Restore original config if it was changed
+        config.CACHE_DATABASE = original_config_db
     if df_files is None or len(df_files) == 0:
         log.info("No caches to delete")
         return
@@ -171,8 +183,37 @@ def clear_caches_older_than(
         .sort_values(by="creationTime")
     )
 
-    def clear_cache_row(row):
-        clear_cache_for_hash(row.hash_name)
+    if len(rows) == 0:
+        log.info(f"No caches older than {num_days} days found in database '{cache_db_to_clear}'.")
+        return
+
+    if confirm_delete:
+        # This part is tricky in a non-interactive notebook environment.
+        # For now, we'll log and proceed if confirm_delete is True (default).
+        # In a real CLI tool, you'd use input().
+        log.info(f"Found {len(rows)} cache(s) older than {num_days} days in database '{cache_db_to_clear}' to delete.")
+        # If this were interactive:
+        # confirmation = input(f"Proceed with deleting {len(rows)} cache(s) from '{cache_db_to_clear}'? (yes/no): ")
+        # if confirmation.lower() != 'yes':
+        #     log.info("Deletion cancelled by user.")
+        #     return
+    elif not confirm_delete:
+        log.info(f"confirm_delete is False. Proceeding with deletion of {len(rows)} cache(s) from '{cache_db_to_clear}'.")
+
+
+    def clear_cache_row(row_info):
+        # When clearing for a specific_database, ensure the hash is cleared from *that* database.
+        # clear_cache_for_hash uses the global config.CACHE_DATABASE, so we need to set it temporarily.
+        current_config_db = config.CACHE_DATABASE
+        if specific_database:
+            config.CACHE_DATABASE = specific_database
+
+        try:
+            clear_cache_for_hash(row_info.hash_name)
+        finally:
+            if specific_database: # Restore original config
+                config.CACHE_DATABASE = current_config_db
+
 
     max_workers = num_threads if num_threads is not None else (os.cpu_count() or 1) * 4
 
@@ -181,6 +222,7 @@ def clear_caches_older_than(
             tqdm(
                 executor.map(clear_cache_row, [row for _, row in rows.iterrows()] if rows is not None else []),
                 total=len(rows),
+                desc=f"Clearing old caches from {cache_db_to_clear}"
             )
         )
 

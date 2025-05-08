@@ -31,12 +31,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 pytestmark = pytest.mark.usefixtures("mock_dataframe_extensions_databricks_env")
 
-from dbfs_spark_cache.caching import (
-    extend_dataframe_methods,
-    read_dbfs_cache_if_exist,
-    write_dbfs_cache,
-)
-
 # from dbfs_spark_cache.dataframe_extensions import display
 from dbfs_spark_cache.config import config
 
@@ -137,11 +131,6 @@ def test_cacheto_dbfs_below_threshold(mock_core_dbutils, mock_dataframe):
         mock_read_cache_alias.assert_called_once()
         mock_write_dbfs_cache.assert_not_called() # Should not write because complexity is below threshold
         assert result == mock_dataframe # Should return self
-
-@patch('dbfs_spark_cache.core_caching.dbutils')
-def test_cacheto_dbfs_deferred(mock_core_dbutils, mock_dataframe):
-    mock_core_dbutils.fs.ls.return_value = []
-    pass
 
 @patch('dbfs_spark_cache.core_caching.dbutils')
 def test_wcd_method(mock_core_dbutils, mock_dataframe):

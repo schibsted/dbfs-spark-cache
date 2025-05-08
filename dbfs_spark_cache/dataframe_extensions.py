@@ -30,7 +30,6 @@ def cacheToDbfs(
     self: DataFrame,
     dbfs_cache_complexity_threshold: Optional[int] = None,
     dbfs_cache_multiplier_threshold: Optional[float] = None,
-    # replace: bool = False, # Parameter removed
     verbose: bool = False,
     **kwargs # Allow other kwargs to be passed to underlying functions if necessary
 ) -> DataFrame:
