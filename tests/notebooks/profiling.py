@@ -99,7 +99,8 @@ data = {
 }
 df = pd.DataFrame(data)
 
-from dbfs_spark_cache.caching import _hash_input_data, clear_cache_for_hash
+from dbfs_spark_cache.hashing import _hash_input_data
+from dbfs_spark_cache.caching import clear_cache_for_hash
 
 data_hash = _hash_input_data(df)
 clear_cache_for_hash(f"data_{data_hash}")
