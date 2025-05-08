@@ -10,7 +10,7 @@ PROJECT_VERSION := $(shell uv tool run tomlq -jr .project.version < pyproject.to
 -include .env
 export $(shell [ -f .env ] && sed 's/=.*//' .env) # Only export if .env exists
 
-.PHONY: help setup lint typecheck test validate-version validate-changelog validate release integration-test update-serverless-env
+.PHONY: help setup lint typecheck test validate-version validate-changelog validate release integration-test
 
 help:
 	@echo "Available targets:"
@@ -22,7 +22,6 @@ help:
 	@echo "  validate-changelog - Validate the Changelog.md for the current version"
 	@echo "  validate           - Run all validation steps (version, changelog, lint, typecheck, test)"
 	@echo "  release            - Tag current version, push tag, and create GitHub release (requires gh cli)"
-	@echo "  update-serverless-env - Update serverless_env.yml with current project version"
 
 setup:
 	@echo "--- Installing dependencies (including dev) ---"
@@ -52,15 +51,6 @@ check-licenses: setup ## Generate the NOTICE file from dependencies
 	# Run pip-licenses and pipe its CSV output directly to the python script
 	uv run pip-licenses --with-license-file --format=csv | uv run python scripts/check_licenses.py
 
-update-serverless-env: ## Update serverless_env.yml with current project version
-	@echo "--- Updating serverless_env.yml with version v$(PROJECT_VERSION) ---"
-	@echo "environment_version: '1'" > serverless_env.yml
-	@echo "dependencies:" >> serverless_env.yml
-	@echo "  - git+https://github.com/schibsted/dbfs-spark-cache.git@v$(PROJECT_VERSION)" >> serverless_env.yml
-	@echo "--- Adding serverless_env.yml to git ---"
-	@git add serverless_env.yml
-	@echo "serverless_env.yml updated successfully with version v$(PROJECT_VERSION)"
-
 validate-version:
 	@echo "--- Validating project version v$(PROJECT_VERSION) ---"
 	@if ! [[ "$(PROJECT_VERSION)" =~ ^[0-9]+\.[0-9]+\.[0-9]+$$ ]]; then \
@@ -82,21 +72,6 @@ validate-release-version:
 		fi \
 	fi
 	@echo "Version v$(PROJECT_VERSION) is a valid new tag (latest is $${LATEST_TAG:-none})."
-	@echo "--- Checking serverless_env.yml version consistency ---"
-	@if [ -f "serverless_env.yml" ]; then \
-		SERVERLESS_VERSION=$$(grep -o '@v[0-9]\+\.[0-9]\+\.[0-9]\+' serverless_env.yml | cut -c2-); \
-		if [ "$$SERVERLESS_VERSION" != "v$(PROJECT_VERSION)" ]; then \
-			echo "::error::Version mismatch: serverless_env.yml references $$SERVERLESS_VERSION but project version is v$(PROJECT_VERSION)."; \
-			echo "::error::Run 'make update-serverless-env' to update serverless_env.yml."; \
-			exit 1; \
-		fi; \
-		echo "serverless_env.yml version ($$SERVERLESS_VERSION) matches project version v$(PROJECT_VERSION)."; \
-	else \
-		echo "::error::serverless_env.yml file not found. Run 'make update-serverless-env' to create it."; \
-		exit 1; \
-	fi
-
-
 
 validate-changelog:
 	@echo "--- Validating Changelog.md for v$(PROJECT_VERSION) ---"
@@ -117,7 +92,7 @@ validate-changelog:
 validate: validate-version validate-changelog lint typecheck test
 	@echo "--- All validation steps passed ---"
 
-release: validate-version validate-changelog validate-release-version update-serverless-env
+release: validate-version validate-changelog validate-release-version
 	@echo "--- Creating release for v$(PROJECT_VERSION) ---"
 	@# Ensure gh is installed and authenticated
 	@if ! command -v gh &> /dev/null; then \
