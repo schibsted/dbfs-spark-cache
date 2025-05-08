@@ -30,9 +30,8 @@ def cacheToDbfs(
     self: DataFrame,
     dbfs_cache_complexity_threshold: Optional[int] = None,
     dbfs_cache_multiplier_threshold: Optional[float] = None,
-    replace: bool = False, # if true, will write even if complexity is low or cache exists
+    # replace: bool = False, # Parameter removed
     verbose: bool = False,
-    # deferred: bool = False, # Deferred logic removed for now, can be added back if needed
     **kwargs # Allow other kwargs to be passed to underlying functions if necessary
 ) -> DataFrame:
     """
@@ -64,15 +63,13 @@ def cacheToDbfs(
         k: v for k, v in input_info.items() if isinstance(v, datetime)
     }
 
-    if not replace:
-        # Pass the original input_info (which might be schema_changed_placeholder) to read_dbfs_cache_if_exist
-        # as it handles these special markers.
-        cached_df = read_dbfs_cache_if_exist(self, query_plan=query_plan_str, input_dir_mod_datetime=input_info)
-        if cached_df is not None:
-            log.info("Returning existing DBFS cache.")
-            # Do not add to _spark_cached_dfs_registry here,
-            # as this is a DBFS cache hit, not a Spark in-memory cache.
-            return cached_df
+    # Always check for existing cache first (replace parameter removed)
+    # Pass the original input_info (which might be schema_changed_placeholder) to read_dbfs_cache_if_exist
+    # as it handles these special markers.
+    cached_df = read_dbfs_cache_if_exist(self, query_plan=query_plan_str, input_dir_mod_datetime=input_info)
+    if cached_df is not None:
+        log.info("Returning existing DBFS cache.")
+        return cached_df
 
     # --- Complexity Estimation (Moved earlier) ---
     # Estimate complexity regardless of thresholds, for logging purposes,
@@ -92,34 +89,33 @@ def cacheToDbfs(
         log.warning(f"Could not estimate compute complexity: {e}. Proceeding without complexity-based threshold checks.")
         # Keep complexity values as None
 
-    # --- Threshold Checks (if not replacing) ---
+    # --- Threshold Checks --- (replace parameter removed)
     should_skip_due_to_thresholds = False
-    if not replace:
-        # Check complexity threshold if estimation was successful and threshold is set
-        if compute_complexity is not None and dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0:
-            if compute_complexity < dbfs_cache_complexity_threshold:
-                log.info(f"Complexity {compute_complexity:.2f} < explicit threshold {dbfs_cache_complexity_threshold}. Skipping DBFS cache.")
-                should_skip_due_to_thresholds = True
+    # Always check thresholds now
+    # Check complexity threshold if estimation was successful and threshold is set
+    if compute_complexity is not None and dbfs_cache_complexity_threshold is not None and dbfs_cache_complexity_threshold > 0:
+        if compute_complexity < dbfs_cache_complexity_threshold:
+            log.info(f"Complexity {compute_complexity:.2f} < explicit threshold {dbfs_cache_complexity_threshold}. Skipping DBFS cache.")
+            should_skip_due_to_thresholds = True
 
-        # Check multiplier threshold if estimation was successful, threshold is set, and not already skipped
-        if not should_skip_due_to_thresholds and multiplier is not None and \
-           dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0:
-            if multiplier < dbfs_cache_multiplier_threshold:
-                log.info(f"Multiplier {multiplier:.2f}x < explicit threshold {dbfs_cache_multiplier_threshold:.2f}x. Skipping DBFS cache.")
-                should_skip_due_to_thresholds = True
+    # Check multiplier threshold if estimation was successful, threshold is set, and not already skipped
+    if not should_skip_due_to_thresholds and multiplier is not None and \
+       dbfs_cache_multiplier_threshold is not None and dbfs_cache_multiplier_threshold > 0:
+        if multiplier < dbfs_cache_multiplier_threshold:
+            log.info(f"Multiplier {multiplier:.2f}x < explicit threshold {dbfs_cache_multiplier_threshold:.2f}x. Skipping DBFS cache.")
+            should_skip_due_to_thresholds = True
 
-        if should_skip_due_to_thresholds:
-            # If skipping due to thresholds, return the original DataFrame without caching.
-            log.info("Skipping DBFS cache due to threshold. Returning original DataFrame without caching.")
-            return self
-            # Removed the check for should_prefer_spark_cache() here, as skipping due to threshold means no caching at all.
+    # If skipping due to thresholds, return the original DataFrame without caching.
+    if should_skip_due_to_thresholds:
+        log.info("Skipping DBFS cache due to threshold. Returning original DataFrame without caching.")
+        return self
 
     # --- Caching Decision ---
     # Check if we should prefer Spark caching (and haven't already returned due to thresholds)
     if should_prefer_spark_cache():
         log.info("Preferring Spark cache, using df.cache()")
-        if replace:
-            log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
+        # if replace: # replace parameter removed
+        #     log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
         # Cache the DataFrame in Spark's memory or disk storage
         cached_df = self.cache()
         return cached_df
@@ -165,7 +161,6 @@ def extend_dataframe_methods(spark_session: SparkSession) -> None:
     Attach extension methods to the DataFrame class and SparkSession.
     """
     DataFrame.cacheToDbfs = cacheToDbfs  # type: ignore[attr-defined]
-    # DataFrame.backupSparkCachedToDbfs is no longer attached as it's removed
     DataFrame.clearDbfsCache = clearDbfsCache  # type: ignore[attr-defined]
     DataFrame.withCachedDisplay = __withCachedDisplay__  # type: ignore[attr-defined]
     DataFrame.wcd = __withCachedDisplay__  # type: ignore[attr-defined]

@@ -349,9 +349,6 @@ def test_cacheToDbfs_deferred_prefer_spark_cache():
 
     original_prefer_spark_cache = app_config.PREFER_SPARK_CACHE
     app_config.PREFER_SPARK_CACHE = True
-    # DF_DBFS_CACHE_QUEUE is removed, deferred logic is handled differently or removed
-    # original_queue = list(caching.DF_DBFS_CACHE_QUEUE) # Save original queue state
-    # caching.DF_DBFS_CACHE_QUEUE.clear()
 
     try:
         # Instead of patching should_prefer_spark_cache, we'll set up the conditions for it to return True
@@ -362,13 +359,11 @@ def test_cacheToDbfs_deferred_prefer_spark_cache():
              patch("dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime", return_value={}), \
              patch("dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist", return_value=None), \
              patch("dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity", return_value=(1.0, 2.0, 200.0)):
-             # patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry") as mock_registry: # Patch registry where it's used - REMOVED
-        # mock_registry is no longer used
+             # patch("dbfs_spark_cache.dataframe_extensions._spark_cached_dfs_registry") as mock_registry:
         # We need to mock its __setitem__ if we want to assert on additions
             # For simplicity, we'll assume the add logic in dataframe_extensions works
             # and focus on the cacheToDbfs behavior.
 
-            # Call as a method - deferred parameter removed
             result_df = mock_df_input.cacheToDbfs()
 
             # In our implementation, we don't check is_spark_cached when PREFER_SPARK_CACHE is True
@@ -377,12 +372,9 @@ def test_cacheToDbfs_deferred_prefer_spark_cache():
             # Assert that the registry (mocked OrderedDict) had an item set
             # The key would be id(mock_df_input), value is (weakref, complexity_tuple)
             # Complexity tuple was (1.0, 2.0, 200.0) in this test's patch
-            # mock_registry.__setitem__.assert_called_once_with(id(mock_df_input), (ANY, (1.0, 2.0, 200.0))) # _spark_cached_dfs_registry is removed
             assert result_df is mock_df_input
     finally:
         app_config.PREFER_SPARK_CACHE = original_prefer_spark_cache
-        # from dbfs_spark_cache import utils as cache_utils  # Import utils # No longer needed here
-        # cache_utils._spark_cached_dfs_registry.clear() # Clear utils registry # _spark_cached_dfs_registry is removed
 
 
 def test_cacheToDbfs_prefer_spark_cache_uses_existing_dbfs_cache():

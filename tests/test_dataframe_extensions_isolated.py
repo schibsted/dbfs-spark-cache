@@ -111,41 +111,12 @@ def test_cacheto_dbfs_new_cache(mock_core_dbutils, mock_dataframe, mock_spark_se
         assert mock_write_dbfs_cache.call_args.kwargs.get('query_plan') == "SimplePlan"
         # cacheToDbfs now returns the DataFrame it was called on after writing
         assert result == mock_dataframe
+# assert result == mock_dataframe # Removed duplicate/misplaced line
 
-# This test also needs @patch('dbfs_spark_cache.core_caching.dbutils') if it uses mock_core_dbutils implicitly through mock_dataframe
-# This test also needs @patch('dbfs_spark_cache.core_caching.dbutils') if it uses mock_core_dbutils implicitly through mock_dataframe
-# However, the direct patches are within the function. Let's assume it's fine for now or add if needed.
-def test_cacheto_dbfs_with_replace_true(mock_dataframe, mock_spark_session):
-    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
-
-    # Attach the cacheToDbfs method to the mock DataFrame
-    mock_dataframe.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_dataframe, **kwargs)
-    mock_dataframe.sparkSession = mock_spark_session
-
-    with patch('dbfs_spark_cache.core_caching.dbutils') as mock_core_dbutils, \
-         patch('dbfs_spark_cache.dataframe_extensions.read_dbfs_cache_if_exist', return_value=None) as mock_read_cache_alias, \
-         patch('dbfs_spark_cache.dataframe_extensions.write_dbfs_cache', return_value=mock_dataframe) as mock_write_dbfs_cache, \
-         patch('dbfs_spark_cache.dataframe_extensions.get_query_plan', return_value="SimplePlan"), \
-         patch('dbfs_spark_cache.dataframe_extensions.get_input_dir_mod_datetime', return_value={}), \
-         patch('dbfs_spark_cache.dataframe_extensions.should_prefer_spark_cache', return_value=False), \
-         patch('dbfs_spark_cache.query_complexity_estimation.estimate_compute_complexity') as mock_estimate_complexity: # Patch estimate_compute_complexity
-        mock_core_dbutils.fs.ls.return_value = []
-        mock_core_dbutils.fs.head.side_effect = Exception("File not found")
-        # createCachedDataFrame is no longer called directly by cacheToDbfs
-        # cached_df = MagicMock(name="CachedDataFrameFromCreate")
-        # mock_create_cached_df.return_value = cached_df
-        mock_estimate_complexity.return_value = (100, 1.0, 100) # Mock complexity to be above threshold
-        result = mock_dataframe.cacheToDbfs(replace=True) # Force replace=True to ensure write_dbfs_cache is called
-
-        # When replace=True, read_dbfs_cache_if_exist is not called in the current implementation
-        # This is the expected behavior based on the cacheToDbfs implementation
-        mock_read_cache_alias.assert_not_called()
-
-        mock_write_dbfs_cache.assert_called_once() # Should write because replace is True by default when threshold is None
-        assert result == mock_dataframe # Should return self
+# test_cacheto_dbfs_with_replace_true removed as 'replace' parameter is removed from cacheToDbfs
 @patch('dbfs_spark_cache.core_caching.dbutils')
 def test_cacheto_dbfs_below_threshold(mock_core_dbutils, mock_dataframe):
-    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs
+    from dbfs_spark_cache.dataframe_extensions import cacheToDbfs # Add missing import
 
     # Attach the cacheToDbfs method to the mock DataFrame
     mock_dataframe.cacheToDbfs = lambda **kwargs: cacheToDbfs(mock_dataframe, **kwargs)
@@ -170,15 +141,7 @@ def test_cacheto_dbfs_below_threshold(mock_core_dbutils, mock_dataframe):
 @patch('dbfs_spark_cache.core_caching.dbutils')
 def test_cacheto_dbfs_deferred(mock_core_dbutils, mock_dataframe):
     mock_core_dbutils.fs.ls.return_value = []
-    # Deferred logic is removed from cacheToDbfs for now
-    # with patch('dbfs_spark_cache.dataframe_extensions.createCachedDataFrame', return_value=mock_dataframe):
-    #     result = mock_dataframe.cacheToDbfs()
-    #     assert result == mock_dataframe
-    # The test should now verify that deferred=True is handled (or removed)
-    # Based on the new cacheToDbfs signature, deferred is not a parameter.
-    # This test should be removed or updated to test the new queueing mechanism if deferred is re-added.
-    # Given the instruction to fix tests, let's remove this test for now as deferred is gone.
-    pass # Removing the test logic for now
+    pass
 
 @patch('dbfs_spark_cache.core_caching.dbutils')
 def test_wcd_method(mock_core_dbutils, mock_dataframe):

@@ -371,12 +371,6 @@ assert not cache_exists_high, f"Cache table {qualified_table_name_high} should N
 print(f"Cache table {qualified_table_name_high} does not exist as expected: {not cache_exists_high}\n")
 
 print("\nTesting deferred caching...")
-df_deferred = cacheToDbfs(df_sql, deferred=True)
-print(f"Deferred caching: {df_deferred}\n")
-
-caching.cache_dataframes_in_queue_to_dbfs()
-print("Executed deferred caching\n")
-
 print("\nTesting cache invalidation with data changes...")
 df_to_invalidate = cacheToDbfs(df_sql)
 data_new = [("Alice", 35, 56000.0), ("Bob", 46, 66000.0), ("Charlie", 30, 73000.0), ("Diana", 38, 59000.0)]
@@ -565,7 +559,6 @@ if not is_serverless_cluster():
     df_cached_classic_spark = cacheToDbfs(df_classic_prefer_true)
 
     assert df_cached_classic_spark.is_cached, "DataFrame should be Spark-cached"
-    # assert id(df_cached_classic_spark) in _spark_cached_dfs_registry, "DataFrame ID should be in registry keys" # Registry is being removed
     table_name_classic_spark = get_table_name_from_hash(hash_classic_prefer_true)
     assert not spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} should NOT exist yet"
     print(f"DataFrame was Spark-cached and added to registry. DBFS table {table_name_classic_spark} does not exist yet.")
@@ -593,7 +586,6 @@ print("Calling cacheToDbfs on classic, PREFER_SPARK_CACHE=False...")
 df_cached_classic_dbfs = cacheToDbfs(df_classic_prefer_false, dbfs_cache_complexity_threshold=0) # Force DBFS cache
 
 assert not df_cached_classic_dbfs.is_cached, "DataFrame should NOT be Spark-cached by default if going to DBFS"
-# assert id(df_cached_classic_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys" # Registry is being removed
 table_name_classic_dbfs = get_table_name_from_hash(hash_classic_prefer_false)
 assert spark.catalog.tableExists(table_name_classic_dbfs), f"DBFS table {table_name_classic_dbfs} SHOULD exist"
 print(f"DataFrame was cached to DBFS. DBFS table {table_name_classic_dbfs} exists.")
@@ -609,7 +601,6 @@ if is_serverless_cluster():
     df_cached_serverless_dbfs = cacheToDbfs(df_serverless_prefer_true, dbfs_cache_complexity_threshold=0) # Force DBFS cache
 
     assert not df_cached_serverless_dbfs.is_cached, "DataFrame should NOT be Spark-cached by default if going to DBFS on serverless"
-    # assert id(df_cached_serverless_dbfs) not in _spark_cached_dfs_registry, "DataFrame ID should NOT be in registry keys on serverless" # Registry is being removed
     table_name_serverless_dbfs = get_table_name_from_hash(hash_serverless_prefer_true)
     assert spark.catalog.tableExists(table_name_serverless_dbfs), f"DBFS table {table_name_serverless_dbfs} SHOULD exist on serverless"
     print(f"DataFrame was cached to DBFS on serverless. DBFS table {table_name_serverless_dbfs} exists.")
@@ -646,7 +637,6 @@ print("Calling first cacheToDbfs in chain...")
 df_chained_spark_cached_1 = cacheToDbfs(df_chained_spark_orig)
 
 assert df_chained_spark_cached_1.is_cached, "First DataFrame in chain should be Spark-cached"
-# assert id(df_chained_spark_cached_1) in _spark_cached_dfs_registry, "First DataFrame ID should be in registry keys" # Registry is being removed
 
 # Apply a transformation and call cacheToDbfs again
 print("\nApplying transformation and calling second cacheToDbfs in chain...")
@@ -654,7 +644,6 @@ df_chained_spark_transformed = df_chained_spark_cached_1.filter(col("salary") > 
 df_chained_spark_cached_2 = cacheToDbfs(df_chained_spark_transformed)
 
 assert df_chained_spark_cached_2.is_cached, "Second DataFrame in chain should be Spark-cached"
-# assert id(df_chained_spark_cached_2) in _spark_cached_dfs_registry, "Second DataFrame ID should be in registry keys" # Registry is being removed
 print("Second DataFrame in chain was Spark-cached and added to registry.")
 
 # Clean up caches created during this test

@@ -184,9 +184,6 @@ from .cache_management import (  # Import from cache_management
     get_tables_from_database,
 )
 from .core_caching import (  # Import from core_caching
-    DF_DBFS_CACHE_QUEUE,  # Re-export
-    add_to_dbfs_cache_queue,
-    cache_dataframes_in_queue_to_dbfs,
     createCachedDataFrame,
     get_cache_metadata,
     get_input_dir_mod_datetime,  # Re-export
@@ -228,8 +225,6 @@ __all__ = [
     "createCachedDataFrame",
     "read_dbfs_cache_if_exist",
     "write_dbfs_cache",
-    "add_to_dbfs_cache_queue",
-    "cache_dataframes_in_queue_to_dbfs",
     "get_tables_from_database",
     "get_cached_tables",
     "clear_caches_older_than",
@@ -243,7 +238,6 @@ __all__ = [
     "get_cache_metadata",
     "get_table_cache_info",
     "get_input_dir_mod_datetime", # Re-export
-    "DF_DBFS_CACHE_QUEUE", # Re-export
     "should_prefer_spark_cache", # Re-exported re-implementation
     "estimate_compute_complexity", # Re-export
     # Re-export DataFrame extension methods and related functions

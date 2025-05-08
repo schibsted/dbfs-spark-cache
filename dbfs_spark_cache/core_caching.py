@@ -29,8 +29,6 @@ except ImportError:
     dbutils = None # type: ignore[assignment,misc]
     spark = None # type: ignore[assignment]
 
-# Initialize global cache queue
-DF_DBFS_CACHE_QUEUE = []
 
 # Store the original createDataFrame method globally
 original_create_dataframe: Optional[Callable] = None
@@ -513,40 +511,7 @@ def write_dbfs_cache(
     except Exception as e:
         log.error(f"Error reading newly created cache table {table_name}: {e}")
         return df
-
-
-def add_to_dbfs_cache_queue(df: DataFrame) -> None:
-    """Adds a DataFrame to the deferred caching queue."""
-    DF_DBFS_CACHE_QUEUE.append(df)
-    log.debug(f"Added DataFrame to deferred cache queue (size: {len(DF_DBFS_CACHE_QUEUE)})")
-
-
-def cache_dataframes_in_queue_to_dbfs():
-    """Processes the queue of DataFrames marked for deferred caching."""
-    i = 0
-    n_start = len(DF_DBFS_CACHE_QUEUE)
-    log.info(f"Processing deferred queue ({n_start} items)...")
-    processed = 0
-    while len(DF_DBFS_CACHE_QUEUE) > 0:
-        df = DF_DBFS_CACHE_QUEUE.pop(0)
-        i += 1
-        log.info(f"Caching deferred ({i}/{n_start})...")
-        t_start = time.time()
-        try:
-            # Dynamic import to avoid circular dependency at module load time
-
-            # Check if the DataFrame instance has the cacheToDbfs method
-            if hasattr(df, 'cacheToDbfs') and callable(getattr(df, 'cacheToDbfs')):
-                getattr(df, 'cacheToDbfs')(deferred=False)
-            else:
-                # Fallback or error if method not attached - this indicates an issue with extension setup
-                log.error("DataFrame instance does not have 'cacheToDbfs' method. Caching skipped for this item.")
-
-            processed += 1
-        except Exception as e:
-            log.error(f"Deferred cache error: {e}", exc_info=True)
-        log.info(f"Deferred item time: {time.time() - t_start:.2f}s")
-    log.info(f"Finished deferred queue ({processed} processed).")
+# return df # Removed stray return statement
 
 
 def is_spark_cached(df: DataFrame) -> bool:
