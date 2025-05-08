@@ -251,26 +251,6 @@ print(f"Query plan for SQL DataFrame (truncated): {plan_sql[:200]}...\n")
 plan_transformed = get_query_plan(df_transformed)
 print(f"Query plan for transformed DataFrame (truncated): {plan_transformed[:200]}...\n")
 
-from pyspark.sql.functions import udf
-from pyspark.sql.types import IntegerType
-
-@udf(returnType=IntegerType())
-def add_ten(x):
-    return x + 10
-
-df_udf = df_simple.withColumn("age_plus_ten", add_ten(col("age")))
-# Check warning
-df_udf.cacheToDbfs()
-
-plan_udf = get_query_plan(df_udf)
-print(f"Query plan for UDF DataFrame (truncated): {plan_udf[:200]}...\n")
-
-@udf(returnType=IntegerType())
-def add_ten(x):
-    return x + 11
-
-print(f'Hashes different: {get_table_hash(df_udf) != get_table_hash(df_simple.withColumn("age_plus_ten", add_ten(col("age"))))}')
-
 print("\nTesting get_cache_metadata...")
 input_dirs_raw = get_input_dir_mod_datetime(df_simple)
 # Filter out non-datetime values for get_cache_metadata
@@ -368,6 +348,18 @@ app_config.PREFER_SPARK_CACHE = False
 
 # COMMAND ----------
 
+# Test manual hash lookup
+from dbfs_spark_cache.caching import get_table_name_from_hash
+df_sql_cached = df_sql.cacheToDbfs()
+the_hash = get_table_hash(df_sql_cached)
+table_name = get_table_name_from_hash(the_hash)
+df_sql_read = spark.read.table(table_name)
+df_sql_content = set(df_sql_cached.collect())
+df_sql_read_content = set(df_sql_read.collect())
+assert df_sql_content == df_sql_read_content, f"Expected {df_sql}, got {df_sql_read}"
+
+# COMMAND ----------
+
 # 4. Test DataFrame Extensions
 print("\nTesting DataFrame.cacheToDbfs...")
 print("Basic caching...")
@@ -407,6 +399,29 @@ df_new.write.mode("overwrite").saveAsTable("test_db.employees")
 df_invalidated = spark.sql("SELECT * FROM test_db.employees").withColumn("dummy_column", lit("dummy_value"))
 df_recached = cacheToDbfs(df_invalidated)
 print("Cache invalidation test completed\n")
+
+# COMMAND ----------
+
+# Test UDFs
+from pyspark.sql.functions import udf
+from pyspark.sql.types import IntegerType
+
+@udf(returnType=IntegerType())
+def add_ten(x):
+    return x + 10
+
+df_udf = df_simple.withColumn("age_plus_ten", add_ten(col("age")))
+# Check warning
+df_udf.cacheToDbfs()
+
+plan_udf = get_query_plan(df_udf)
+print(f"Query plan for UDF DataFrame (truncated): {plan_udf[:200]}...\n")
+
+@udf(returnType=IntegerType()) # type: ignore[no-redef] # pyright: ignore[reportRedeclaration]
+def add_ten(x):
+    return x + 11
+
+print(f'Hashes different: {get_table_hash(df_udf) != get_table_hash(df_simple.withColumn("age_plus_ten", add_ten(col("age"))))}')
 
 # COMMAND ----------
 

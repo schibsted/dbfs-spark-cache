@@ -81,17 +81,11 @@ Because spark cache is faster than dbfs cache when used with clusers with enough
 - **Backup of Spark-cached DataFrames**: Use `backup_spark_cached_to_dbfs()` to persist all Spark-cached DataFrames to DBFS before cluster termination, although the performance win of having it in sparch chache is not that big compared to rerunning all with dbfs caching directly.
 - **Configurable caching mode**: The config `PREFER_SPARK_CACHE` (default: True) controls whether Spark in-memory cache is preferred on classic clusters. On serverless clusters, DBFS caching is always used.
 - **Automatic registry of Spark-cached DataFrames**: DataFrames cached via `.cacheToDbfs()` in Spark-cache mode are tracked and can be listed or backed up.
-- **Full test coverage**: All new logic is covered by unit and integration tests.
 
 By default (on classic clusters), calling `.cacheToDbfs()` will:
 - Use Spark's in-memory cache (`.cache()`) if no DBFS cache exists. `.wcd()` will cache with Spark or not based on the estimated compute complexity of the query.
 - If a DBFS cache exists, it will be read instead.
 - You can persist all Spark-cached DataFrames to DBFS at any time (e.g. before cluster shutdown) with:
-
-```python
-from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
-backup_spark_cached_to_dbfs(specific_dfs=[my_df_used_with_wcd, my_last_end_of_work_df]) # backs up one or more specific DataFrames, eg the final result of your work and the DataFrames used with withCachedDisplay(), so you can pick up faster next time
-```
 
 To force always caching to DBFS set:
 
@@ -104,8 +98,24 @@ On serverless clusters, DBFS caching is always used regardless of this setting (
 ```python
     dbfs_cache.extend_dataframe_methods(disable_cache_and_display=True)
 ```
-and it will keep the DataFrame unchanged.
+and it will keep the DataFrame unchanged. When using spark cache you can do the persist to DBFS like this:
 
+```python
+from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
+# backs up one or more specific DataFrames, eg the final result of your work and the DataFrames used with withCachedDisplay(), so you can pick up faster next time
+backup_spark_cached_to_dbfs(specific_dfs=[my_df_used_with_wcd, my_last_end_of_work_df])
+```
+
+Alternativley, if you don't care about cache invalidation you can just use this lookup which avoids needing to rerun all query logic:
+```python
+from dbfs_spark_cache.caching import get_table_name_from_hash
+df = spark.read.table(get_table_name_from_hash("THE_HASH"))
+```
+where `"THE_HASH"` is the hash of the DataFrame you saved from before via:
+```python
+from dbfs_spark_cache.caching import get_table_hash
+print(get_table_hash(df))
+```
 
 ### Dataframe cache invalidation techniques that triggers cache invalidation?
 

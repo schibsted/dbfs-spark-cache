@@ -14,6 +14,7 @@ from .dataframe_extensions import (  # Import from dataframe_extensions
 from .utils import (  # Import from utils
     get_hash_from_metadata,
     is_serverless_cluster,
+    get_table_name_from_hash,
 )
 
 
@@ -235,6 +236,7 @@ __all__ = [
     "get_query_plan",
     "get_cache_metadata",
     "get_table_cache_info",
+    "get_table_name_from_hash",
     "get_input_dir_mod_datetime", # Re-export
     "should_prefer_spark_cache", # Re-exported re-implementation
     "estimate_compute_complexity", # Re-export
