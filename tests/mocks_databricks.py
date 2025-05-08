@@ -3,6 +3,7 @@ import sys
 import pytest
 from unittest.mock import MagicMock
 from datetime import datetime
+from dbfs_spark_cache.dataframe_extensions import extend_dataframe_methods
 
 class MockFileInfo:
     """Mock file info class for dbutils.fs operations."""
@@ -62,7 +63,14 @@ def mock_dataframe_extensions_databricks_env():
     # Also install dbutils as a top-level module for direct imports
     sys.modules['dbutils'] = mock_dbutils
 
-    yield
+    # Extend methods on the mocked spark session
+    extend_dataframe_methods(mock_runtime.spark)
+
+    # Yield the mock objects needed by the tests
+    yield {
+        'spark_session': mock_runtime.spark,
+        'display_fun': mock_runtime.display
+    }
 
     # Restore original modules
     if original_databricks is not None:

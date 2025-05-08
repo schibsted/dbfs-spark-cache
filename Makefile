@@ -57,7 +57,6 @@ validate-version:
 		echo "::error::Version $(PROJECT_VERSION) must match semantic format X.Y.Z"; \
 		exit 1; \
 	fi
-
 validate-release-version:
 	@if git rev-parse "v$(PROJECT_VERSION)" >/dev/null 2>&1; then \
 		echo "::error::Tag v$(PROJECT_VERSION) already exists. Have you updated the version in pyproject.toml?"; \
@@ -73,7 +72,6 @@ validate-release-version:
 		fi \
 	fi
 	@echo "Version v$(PROJECT_VERSION) is a valid new tag (latest is $${LATEST_TAG:-none})."
-
 
 validate-changelog:
 	@echo "--- Validating Changelog.md for v$(PROJECT_VERSION) ---"
@@ -94,7 +92,7 @@ validate-changelog:
 validate: validate-version validate-changelog lint typecheck test
 	@echo "--- All validation steps passed ---"
 
-release: validate-version validate-changelog
+release: validate-version validate-changelog validate-release-version
 	@echo "--- Creating release for v$(PROJECT_VERSION) ---"
 	@# Ensure gh is installed and authenticated
 	@if ! command -v gh &> /dev/null; then \

@@ -8,6 +8,7 @@ To some extent this library will trade some smaller amount of extra query latenc
 
 - **DataFrame caching**: Intelligent caching system using DBFS (Databricks File System).
 - **Query complexity estimation**: Tools to analyze and estimate Spark query complexity and trigger caching if above some set threshold.
+- **Hybrid Spark/DBFS caching**: On classic clusters, you can now prefer Spark's in-memory cache (`.cache()`) for fast iterative work, and only persist to DBFS when needed (see below).
 
 ## Installation
 
@@ -55,6 +56,8 @@ Requires Python 3.10 or higher. Install using pip:
     spark.createDataFrame = spark.createCachedDataFrame
 ```
 
+Note: serverless clusters do not support monkey patching, ie extending with new methods, so `df.cacheToDbfs()` needs to be replaced with `cacheToDbfs(df)` and similar for `createCachedDataFrame(spark, ...)`. However `cacheToDbfs` (imported from `dbfs_spark_cache.caching`) can be used with `df.transform(cacheToDbfs)`. Unfortunatley write (and read) performance is really poor with serverless clusters, so it can't be recommended for general use with library.
+
 Default cache trigger thresholds can be set per notebook by calling
 ```python
     dbfs_cache.extend_dataframe_methods(
@@ -71,6 +74,49 @@ DBFS_CACHE_MULTIPLIER_THRESHOLD=1.01
 Set either threshold to None to disable that specific check.
 Caching occurs only if BOTH conditions are met (or the threshold is None).
 
+## Hybrid Spark/DBFS Caching and Backup
+
+Because spark cache is faster than dbfs cache when used with clusers with enough memory or disk space (and fast SSD disks are use as well), we can use it for fast iterative work, and only persist to dbfs when needed, ie when shutting down the cluster.
+
+- **Backup of Spark-cached DataFrames**: Use `backup_spark_cached_to_dbfs()` to persist all Spark-cached DataFrames to DBFS before cluster termination, although the performance win of having it in sparch chache is not that big compared to rerunning all with dbfs caching directly.
+- **Configurable caching mode**: The config `PREFER_SPARK_CACHE` (default: True) controls whether Spark in-memory cache is preferred on classic clusters. On serverless clusters, DBFS caching is always used.
+- **Automatic registry of Spark-cached DataFrames**: DataFrames cached via `.cacheToDbfs()` in Spark-cache mode are tracked and can be listed or backed up.
+
+By default (on classic clusters), calling `.cacheToDbfs()` will:
+- Use Spark's in-memory cache (`.cache()`) if no DBFS cache exists. `.wcd()` will cache with Spark or not based on the estimated compute complexity of the query.
+- If a DBFS cache exists, it will be read instead.
+- You can persist all Spark-cached DataFrames to DBFS at any time (e.g. before cluster shutdown) with:
+
+To force always caching to DBFS set:
+
+```python
+from dbfs_spark_cache.config import config
+config.PREFER_SPARK_CACHE = False
+```
+
+On serverless clusters, DBFS caching is always used regardless of this setting (spark cache is not available). If you want to disable all calls to the extensions you can do:
+```python
+    dbfs_cache.extend_dataframe_methods(disable_cache_and_display=True)
+```
+and it will keep the DataFrame unchanged. When using spark cache you can do the persist to DBFS like this:
+
+```python
+from dbfs_spark_cache.caching import backup_spark_cached_to_dbfs
+# backs up one or more specific DataFrames, eg the final result of your work and the DataFrames used with withCachedDisplay(), so you can pick up faster next time
+backup_spark_cached_to_dbfs(specific_dfs=[my_df_used_with_wcd, my_last_end_of_work_df])
+```
+
+Alternativley, if you don't care about cache invalidation you can just use this lookup which avoids needing to rerun all query logic:
+```python
+from dbfs_spark_cache.caching import get_table_name_from_hash
+df = spark.read.table(get_table_name_from_hash("THE_HASH"))
+```
+where `"THE_HASH"` is the hash of the DataFrame you saved from before via:
+```python
+from dbfs_spark_cache.caching import get_table_hash
+print(get_table_hash(df))
+```
+
 ### Dataframe cache invalidation techniques that triggers cache invalidation?
 
 Dataframe storage type|Query plan changes|Data changes
@@ -83,15 +129,11 @@ In-Memory|No not directly, but via conversion to BDFS table through createCached
 This library has been primarily tested under the following Databricks environment configuration, but anything supported by Databricks and PySpark DataFrame API should or may work too:
 
 - **Databricks database**: Hive Metastore
-- **Databricks Runtime Version**: 15.4 LTS
+- **Databricks Runtime Version**: 15.4 LTS, client.1.13 (serverless cluster)
 - **Storage Layer**: DBFS and S3
 - **File Formats**: Parquet, JSON
 
-If you want to disable all calls to the extensions you can do:
-```python
-    dbfs_cache.extend_dataframe_methods(disable_cache_and_display=True)
-```
-and it will keep the DataFrame unchanged.
+Note that serverless performance when writing to DBFS is currently abysmal and can only be used for limited testing on small datasets. You can use file `serverless_env.yml` to automatically install the library on a serverless cluster.
 
 #### What is "Total compute complexity" anyway?
 

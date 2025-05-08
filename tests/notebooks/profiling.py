@@ -82,16 +82,12 @@ setup_dependencies(REPO_PATH, spark)  # noqa: F821
 
 # COMMAND ----------
 
-dbutils.library.restartPython()  # noqa: F821
-
-# COMMAND ----------
-
 # Measure the extra latency incurred by createCachedDataFrame
 
 import pandas as pd
 import time
 from dbfs_spark_cache import extend_dataframe_methods
-extend_dataframe_methods()
+extend_dataframe_methods(spark) # Pass spark
 
 # Test createCachedDataFrame performace
 # Create a large DataFrame (100,000 rows, 10 columns)
@@ -103,7 +99,8 @@ data = {
 }
 df = pd.DataFrame(data)
 
-from dbfs_spark_cache.caching import _hash_input_data, clear_cache_for_hash
+from dbfs_spark_cache.hashing import _hash_input_data
+from dbfs_spark_cache.caching import clear_cache_for_hash
 
 data_hash = _hash_input_data(df)
 clear_cache_for_hash(f"data_{data_hash}")
@@ -128,5 +125,3 @@ spark_time = t3 - t2
 
 print(f"\n_hash_input_data time: {hash_time:.4f} s, ({second_hash_time:.4f}s second)")
 print(f"Spark createDataFrame time: {spark_time:.4f} s")
-
-# COMMAND ----------

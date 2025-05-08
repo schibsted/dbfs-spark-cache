@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         description="Database name for cached tables",
     )
 
+    CACHE_DATABASE_TEST: str = Field(
+        default="", # Will be set dynamically
+        description="Database name for cached tables during testing. Defaults to CACHE_DATABASE + '_test'.",
+    )
+
     DATABASE_PATH: str = Field(
         default="/dbfs/user/hive/warehouse/",
         description="Base path for the Hive warehouse where cache databases reside.",
@@ -35,7 +40,16 @@ class Settings(BaseSettings):
         description="Default multiplier threshold for caching",
     )
 
+    PREFER_SPARK_CACHE: bool = Field(
+        default=True,
+        description="If True and running on a classic (non-serverless) cluster, prioritize Spark's in-memory cache (.cache()) over immediate DBFS writes. DBFS cache will still be read if it exists, and a backup function can persist Spark-cached DFs to DBFS later. This setting is ignored (effectively False) on serverless clusters."
+    )
+
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
+    def __init__(self, **values): # type: ignore
+        super().__init__(**values)
+        if not self.CACHE_DATABASE_TEST:
+            self.CACHE_DATABASE_TEST = f"{self.CACHE_DATABASE}_test"
 
 config: Settings = Settings()

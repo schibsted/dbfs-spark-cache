@@ -1,28 +1,85 @@
 """Query complexity estimation utilities."""
+import logging
 from typing import List
+from dbfs_spark_cache.utils import is_serverless_cluster
 
 from pyspark.sql import DataFrame
 
+# Import dbutils and get_quedy_plan grom_cach fr moduleom caching module
+try:
+    from databricks.sdk.runtime import dbutils
+except ImportError:
+    dbutils = None # type: ignore[assignment,misc]
+
+log = logging.getLogger(__name__)
+
 
 def get_input_file_sizes(df: DataFrame) -> List[float]:
-    """Get sizes of input files in GB."""
+    """Get sizes of input files in GB, using dbutils.fs.ls on serverless and Hadoop API otherwise."""
     input_files = df.inputFiles()
-    file_sizes = []
-    for file_path in input_files:
+    if not input_files: # Optimization: if no input files, return early
+        log.debug("No input files found for DataFrame.")
+        return []
+    file_sizes: List[float] = []
+
+    if is_serverless_cluster():
+        log.debug("Running on a serverless cluster, using dbutils.fs.ls for file sizes.")
+        if dbutils is None:
+            log.warning("dbutils not available on a serverless cluster, cannot get input file sizes.")
+            return [] # Return empty list, as per original behavior if dbutils is missing
+
+        for file_path in input_files:
+            try:
+                # Use dbutils.fs.ls to get file status which includes size
+                # dbutils.fs.ls returns a list of FileInfo objects
+                file_info_list = dbutils.fs.ls(file_path)
+                if file_info_list:
+                    # Assuming inputFiles returns actual file paths, not directories
+                    # If it returns directories, we might need to list recursively
+                    file_size = float(file_info_list[0].size)
+                    # Convert bytes to GB
+                    file_sizes.append(file_size / (1024 * 1024 * 1024))
+                else:
+                    log.warning(f"dbutils.fs.ls returned empty list for {file_path}. Skipping size.")
+            except Exception as e:
+                # Skip files that can't be accessed or listed
+                log.warning(f"Could not get file size for {file_path} using dbutils.fs.ls: {e}. Skipping.")
+                continue
+    else:
+        log.debug("Running on a non-serverless cluster, using Hadoop API for file sizes.")
+        jsc = None
         try:
-            # Ensure SparkContext is available
             jsc = df.sparkSession._jsc
             if jsc is None:
-                raise Exception("Java SparkContext not available")
+                log.error("Java SparkContext (jsc) is None on a non-serverless cluster. Cannot get input file sizes via Hadoop API.")
+                return [] # Cannot proceed without jsc
+        except AttributeError: # pragma: no cover
+            # This case might be hard to test if SparkSession always has _jsc or raises different error
+            log.error("Could not access Java SparkContext (df.sparkSession._jsc). Cannot get input file sizes via Hadoop API.")
+            return [] # Cannot proceed without jsc
 
-            path = df.sparkSession._jvm.org.apache.hadoop.fs.Path(file_path)  # type: ignore[union-attr]
-            fs = path.getFileSystem(jsc.hadoopConfiguration())
-            file_size = float(fs.getFileStatus(path).getLen())
-            # Convert bytes to GB
-            file_sizes.append(file_size / (1024 * 1024 * 1024))
-        except Exception:
-            # Skip files that can't be accessed
-            continue
+        # Ensure _jvm is accessible
+        if not hasattr(df.sparkSession, '_jvm') or df.sparkSession._jvm is None: # pragma: no cover
+            log.error("SparkSession._jvm is not accessible. Cannot use Hadoop API for file sizes.")
+            return []
+
+        for file_path in input_files:
+            try:
+                # Access JVM Path class and create Path object
+                hadoop_path_class = df.sparkSession._jvm.org.apache.hadoop.fs.Path
+                path_obj = hadoop_path_class(file_path)
+
+                # Get FileSystem and FileStatus
+                fs = path_obj.getFileSystem(jsc.hadoopConfiguration())
+                file_status = fs.getFileStatus(path_obj)
+                file_size_bytes = float(file_status.getLen())
+
+                # Convert bytes to GB
+                file_sizes.append(file_size_bytes / (1024 * 1024 * 1024))
+            except Exception as e: # pragma: no cover
+                # Broad exception catch as various issues can occur with FS interactions
+                log.warning(f"Could not get file size for {file_path} using Hadoop API: {e}. Skipping.")
+                continue
     return file_sizes
 
 
@@ -142,7 +199,7 @@ def _calculate_complexity_from_plan(query_plan: str, total_size: float) -> tuple
     return complexity, multiplier
 
 
-def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:  # Modified return type
+def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:
     """Calculate total compute complexity and multiplier based on input data size and query plan.
 
     The complexity is estimated as the sum of input file sizes in GB
@@ -170,19 +227,30 @@ def estimate_compute_complexity(df: DataFrame) -> tuple[float, float, float]:  #
     file_sizes = get_input_file_sizes(df)
     total_size = sum(file_sizes)
 
-    # If no input files or zero size, complexity is 0
+    # If no input files or zero size, log a warning and return base multiplier
     if not total_size:
-        return 0.0, 1.0, 0.0  # Return default multiplier and zero size
+        log.warning("Could not determine input file sizes (df.inputFiles() might be empty due to transformations or RDD lineage). Complexity estimation will be based on plan only.")
+        # Return 0 complexity, base multiplier, and 0 size.
+        # The multiplier calculation below will still run based on the plan.
+        # We return 0 size explicitly.
+        # Let's calculate the multiplier based on the plan even without size.
+        from dbfs_spark_cache.caching import get_query_plan
+        query_plan_str = get_query_plan(df).lower()
+        if query_plan_str.startswith("error:"):
+             log.warning(f"Could not get query plan for complexity estimation: {query_plan_str}. Returning base complexity.")
+             return 0.0, 1.0, 0.0 # Base multiplier, 0 size, 0 complexity
 
-    # Get the analyzed logical query plan
-    try:
-        # Use analyzed plan for estimation before optimization
-        query_plan_str = df._jdf.queryExecution().analyzed().toString().lower()
-    except Exception:
-        # If plan cannot be accessed (e.g., during DataFrame creation before action)
-        # return base complexity (size * 1.0). Consider logging this.
-        # logger.warning("Could not access query plan for complexity estimation.")
-        return total_size, 1.0, total_size  # Equivalent to total_size * 1.0
+        # Calculate multiplier based on plan, but complexity is 0 due to unknown size
+        _, multiplier = _calculate_complexity_from_plan(query_plan_str, 0.0) # Pass 0 size
+        return 0.0, multiplier, 0.0 # Return 0 complexity, calculated multiplier, 0 size
+
+    from dbfs_spark_cache.caching import get_query_plan
+    query_plan_str = get_query_plan(df).lower()
+
+    # If get_query_plan returned an error string, we can't estimate complexity
+    if query_plan_str.startswith("error:"):
+        log.warning(f"Could not get query plan for complexity estimation: {query_plan_str}. Returning base complexity.")
+        return total_size, 1.0, total_size
 
     # Delegate the core calculation and return the tuple with total_size
     complexity, multiplier = _calculate_complexity_from_plan(query_plan_str, total_size)
