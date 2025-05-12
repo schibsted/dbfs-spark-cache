@@ -28,6 +28,7 @@ def should_prefer_spark_cache() -> bool:
 
 def cacheToDbfs(
     self: DataFrame,
+    override_prefer_spark_cache: bool = False,
     dbfs_cache_complexity_threshold: Optional[int] = None,
     dbfs_cache_multiplier_threshold: Optional[float] = None,
     verbose: bool = False,
@@ -111,7 +112,7 @@ def cacheToDbfs(
 
     # --- Caching Decision ---
     # Check if we should prefer Spark caching (and haven't already returned due to thresholds)
-    if should_prefer_spark_cache():
+    if not override_prefer_spark_cache and should_prefer_spark_cache():
         log.info("Preferring Spark cache, using df.cache()")
         # if replace: # replace parameter removed
         #     log.info("`replace=True` is ignored for DBFS operations as Spark in-memory cache is prioritized for this action.")
