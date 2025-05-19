@@ -611,7 +611,7 @@ if not is_serverless_cluster():
     assert spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} SHOULD exist after backup"
     print(f"DBFS table {table_name_classic_spark} exists after backup.")
     clear_cache_for_hash(hash_classic_prefer_true) # Clean up
-    
+
     # Now, test backup with override_prefer_spark_cache=True
     df_cached_classic_spark_override = cacheToDbfs(df_classic_prefer_true, override_prefer_spark_cache=True)
     df_cached_classic_spark_override_hash = get_table_hash(df_cached_classic_spark_override)
