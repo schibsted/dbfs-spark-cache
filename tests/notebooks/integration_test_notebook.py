@@ -609,10 +609,15 @@ if not is_serverless_cluster():
     print("\\nTesting backup_spark_cached_to_dbfs...")
     backup_spark_cached_to_dbfs(specific_dfs=[df_cached_classic_spark], min_complexity_threshold=None, min_multiplier_threshold=None)
     assert spark.catalog.tableExists(table_name_classic_spark), f"DBFS table {table_name_classic_spark} SHOULD exist after backup"
+    print(f"DBFS table {table_name_classic_spark} exists after backup.")
+    clear_cache_for_hash(hash_classic_prefer_true) # Clean up
 
-# print("Test for logging of original complexity tuple during backup passed.") # Commented out as test is removed
-print(f"DBFS table {table_name_classic_spark} exists after backup.")
-clear_cache_for_hash(hash_classic_prefer_true) # Clean up
+    # Now, test backup with override_prefer_spark_cache=True
+    df_cached_classic_spark_override = cacheToDbfs(df_classic_prefer_true, override_prefer_spark_cache=True)
+    df_cached_classic_spark_override_hash = get_table_hash(df_cached_classic_spark_override)
+    table_name_classic_spark_override = get_table_name_from_hash(df_cached_classic_spark_override_hash)
+    assert spark.catalog.tableExists(table_name_classic_spark_override), f"DBFS table {table_name_classic_spark_override} SHOULD exist with override_prefer_spark_cache=True"
+    clear_cache_for_hash(df_cached_classic_spark_override_hash) # Clean up
 
     # Scenario 2: Classic cluster, PREFER_SPARK_CACHE = False
 app_config.PREFER_SPARK_CACHE = False
